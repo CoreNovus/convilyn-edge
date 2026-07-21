@@ -1,0 +1,118 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "convilyn-edge"
+dynamic = ["version"]
+description = "Convilyn Edge AI Workflow SDK — the 7-primitive Device Data Plane SPI for building auditable, offline-capable edge AI workflows"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [
+    { name = "Convilyn", email = "sdk@convilyn.corenovus.com" },
+]
+keywords = [
+    "convilyn",
+    "edge",
+    "iot",
+    "ai",
+    "workflow",
+    "spi",
+    "device",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Hardware",
+    "Typing :: Typed",
+]
+# ZERO runtime dependencies — the edge SPI is pure typed Protocols + frozen
+# dataclasses so adapters/packs depend on the interface, never on a runtime.
+# `typing.Protocol` / `runtime_checkable` / `Literal` / `Generic` are all
+# stdlib >= 3.10, so no `typing-extensions` shim is required either.
+dependencies = []
+
+[project.urls]
+Homepage = "https://convilyn.corenovus.com"
+Documentation = "https://docs.convilyn.corenovus.com"
+Issues = "https://github.com/CoreNovus/convilyn-edge/issues"
+Repository = "https://github.com/CoreNovus/convilyn-edge"
+
+[project.scripts]
+convilyn-edge = "convilyn_edge.cli.main:main"
+
+# Dev tooling lives in a PEP 735 dependency group (uv-native: `uv sync`
+# installs it by default). Kept out of the wheel/sdist METADATA — never a
+# runtime or optional-install concern for consumers.
+[dependency-groups]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "ruff==0.15.6",
+]
+
+[tool.hatch.version]
+path = "src/convilyn_edge/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/convilyn_edge"]
+
+[tool.hatch.build.targets.sdist]
+# Ship CHANGELOG + tests in the sdist so source-install workflows get the
+# full surface. The wheel stays lean — README is bundled in METADATA
+# (rendered on PyPI); LICENSE is picked up via `license-files`.
+include = [
+    "src/convilyn_edge",
+    "tests",
+    "CHANGELOG.md",
+    "LICENSE",
+    "pyproject.toml",
+    "README.md",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# Coverage measured AND enforced (line >= 80%) per the repo unit-testing
+# skill, with branch coverage on to surface uncovered conditionals.
+addopts = "--cov=src/convilyn_edge --cov-branch --cov-fail-under=80 --cov-report=term-missing --cov-report=xml"
+
+[tool.coverage.run]
+source = ["src/convilyn_edge"]
+branch = true
+# Zero-logic modules don't dilute the percentage: `_version.py` only declares
+# __version__; the re-export `__init__.py` files carry no branches.
+omit = [
+    "src/convilyn_edge/_version.py",
+    "src/convilyn_edge/__init__.py",
+    "src/convilyn_edge/spi/__init__.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 80
+# Protocol method bodies are ``...`` stubs that are never executed (Protocols
+# are structural — never instantiated/called), and TYPE_CHECKING-only imports
+# don't run. Excluding them keeps coverage honest about real logic.
+exclude_also = [
+    "^\\s*\\.\\.\\.\\s*$",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
