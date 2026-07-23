@@ -22,7 +22,7 @@ backend (zero runtime dependencies; the "no reverse dependency" removability che
 
 ``silicon`` is produced by **file-existence probes** (a Jetson tegra-release file,
 a Qualcomm marker in cpuinfo) that yield a *string*; everything downstream is a
-table lookup, never an ``if silicon == …`` control-flow branch. Every probe is
+table lookup, never a silicon-equality control-flow branch. Every probe is
 **graceful**: a missing file, an absent ``nvidia-smi``, or a non-POSIX host
 degrades to a sensible default (unknown silicon → ``generic_<machine>``; no
 discrete GPU → ``vram_mb=None``) and **never raises**. Stdlib only.
@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import os
 import platform
+import shutil
 import subprocess
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -51,13 +52,14 @@ _TEGRA_RELEASE = Path("/etc/nv_tegra_release")
 #: CPU info; a Qualcomm marker here identifies a Snapdragon host.
 _CPUINFO = Path("/proc/cpuinfo")
 
-#: Silicon → whether it carries a neural accelerator. A table (OCP), never an
-#: ``if silicon ==`` branch: a new accelerator device is one row. Unknown/generic
-#: silicon defaults to ``False`` (a device that knows better can construct the
-#: manifest explicitly).
+#: Silicon families where EVERY device carries an NPU. A table (OCP), never a
+#: silicon branch; absent silicon defaults to ``False`` (conservative; a frozen-matrix decision).
+#: ``jetson_orin`` is absent by design: the family splits (Orin Nano has no DLA,
+#: Orin NX / AGX do) and the probe can't tell them apart, so an Orin defaults to
+#: ``False`` and a DLA-bearing one sets ``has_npu=True`` on its own manifest.
 _SILICON_NPU: dict[str, bool] = {
-    "jetson_orin": True,
-    "snapdragon_x": True,
+    "jetson_xavier": True,  # every Xavier (AGX / NX) carries 2× DLA
+    "snapdragon_x": True,  # every Snapdragon X carries a Hexagon NPU
 }
 
 #: Conservative positive floor for ``ram_mb`` when the host cannot report physical
@@ -65,6 +67,34 @@ _SILICON_NPU: dict[str, bool] = {
 #: the wire manifest's "ram_mb > 0" invariant satisfied; a device that knows its
 #: real memory should construct the manifest directly.
 _FALLBACK_RAM_MB = 1024
+
+#: Silicon → local runtime that serves an asset, MIRRORING the backend's
+#: ``device_model_ladder._RUNTIME_BY_SILICON`` by VALUE (this package imports
+#: nothing from the backend). Pinned field-for-field to the frozen device-capability matrix
+#: (``docs/reference/edge_device_matrix.md`` §2); a parity test guards the values.
+#: A pure lookup — never a silicon-equality branch — so a new silicon is one row
+#: (OCP), never a control-flow special-case.
+_RUNTIME_BY_SILICON: dict[str, str] = {
+    "jetson_orin": "llama_cpp_cuda",
+    "jetson_xavier": "llama_cpp_cuda",
+    "snapdragon_x": "onnxruntime_qnn",
+}
+#: The runtime for any silicon not in the table (a plain CPU host runs GGUF here).
+_DEFAULT_RUNTIME = "llama_cpp"
+
+
+def resolve_runtime(silicon: str) -> str:
+    """The default local runtime that serves an asset on ``silicon`` — deterministic.
+
+    A pure table lookup mirroring the backend ladder's per-silicon runtime map
+    (frozen device-capability matrix): ``jetson_orin`` / ``jetson_xavier`` → ``llama_cpp_cuda``,
+    ``snapdragon_x`` → ``onnxruntime_qnn``, everything else → ``llama_cpp``. This is
+    the SDK-side descriptor the runner registry selects a concrete runner on
+    (:func:`convilyn_edge.runners.select_runner`) — never a silicon-equality
+    branch. It reports a *default*; a device that installed an asset under a
+    different runtime records that explicitly on the asset's ``runtime`` field.
+    """
+    return _RUNTIME_BY_SILICON.get(silicon, _DEFAULT_RUNTIME)
 
 
 @dataclass(frozen=True)
@@ -107,6 +137,16 @@ class DeviceCapabilityManifest:
     ram_mb: int
     vram_mb: int | None = None
     has_npu: bool = False
+    #: Total on-device storage CAPACITY in GiB (``None`` when unreported) — a stable
+    #: device characteristic the storage-tier selector reads (additive to the
+    #: capability matrix). NOT free space: an install-time fit check uses live free space +
+    #: the artifact ``size_bytes``, never this cached capacity.
+    disk_gb: int | None = None
+    #: A removable medium (SD card / USB) assets may be staged onto is present.
+    removable: bool = False
+    #: Path / identifier of a large-asset / media store mount, or ``None`` — the tier
+    #: the storage seam may place bulk weights on.
+    media_store: str | None = None
     installed_assets: tuple[InstalledAsset, ...] = field(default_factory=tuple)
 
     def to_wire(self) -> dict[str, Any]:
@@ -122,6 +162,9 @@ class DeviceCapabilityManifest:
             "ram_mb": self.ram_mb,
             "vram_mb": self.vram_mb,
             "has_npu": self.has_npu,
+            "disk_gb": self.disk_gb,
+            "removable": self.removable,
+            "media_store": self.media_store,
             "installed_assets": [asset.to_wire() for asset in self.installed_assets],
         }
 
@@ -197,10 +240,27 @@ def _detect_vram_mb() -> int | None:
         return None
 
 
+def _detect_disk_gb() -> int | None:
+    """Total on-device storage in GiB via :func:`shutil.disk_usage`; ``None`` on failure.
+
+    Measured at the current working directory (the device's install root). Any I/O
+    error (a non-existent path, a permission issue on a restricted sandbox) degrades
+    to ``None`` — never raises. Reported in whole GiB (floor), matching the manifest's
+    coarse pre-flight granularity.
+    """
+    try:
+        total_bytes = shutil.disk_usage(".").total
+    except OSError:
+        return None
+    return total_bytes // (1024**3)
+
+
 def probe_device(
     *,
     device_id: str,
     installed_assets: Iterable[InstalledAsset] = (),
+    removable: bool = False,
+    media_store: str | None = None,
 ) -> DeviceCapabilityManifest:
     """Detect this host's capabilities and return a reportable manifest.
 
@@ -211,11 +271,17 @@ def probe_device(
         installed_assets: the model assets actually installed on the device. The
             probe cannot enumerate installed weights (that is the packaging step's
             knowledge), so the caller passes them; defaults to none.
+        removable: whether a removable medium (SD card / USB) is present for staging
+            assets. Not reliably auto-detectable across platforms, so the integrator
+            supplies it; defaults to ``False``.
+        media_store: the path / identifier of a large-asset / media store mount, or
+            ``None``. Device-specific, so the integrator supplies it; defaults to ``None``.
 
     Returns:
         A :class:`DeviceCapabilityManifest` with ``silicon`` / ``ram_mb`` /
-        ``vram_mb`` / ``has_npu`` filled from the host. ``.to_wire()`` on it is the
-        exact snake_case body the backend's ``device_manifest`` field accepts.
+        ``vram_mb`` / ``has_npu`` / ``disk_gb`` filled from the host (``removable`` /
+        ``media_store`` from the args). ``.to_wire()`` on it is the exact snake_case
+        body the backend's ``device_manifest`` field accepts.
 
     Never raises: every hardware probe degrades gracefully (unknown → generic).
     """
@@ -226,6 +292,9 @@ def probe_device(
         ram_mb=_detect_ram_mb(),
         vram_mb=_detect_vram_mb(),
         has_npu=_SILICON_NPU.get(silicon, False),
+        disk_gb=_detect_disk_gb(),
+        removable=removable,
+        media_store=media_store,
         installed_assets=tuple(installed_assets),
     )
 
@@ -236,4 +305,5 @@ __all__ = [
     "InstalledAsset",
     "DeviceCapabilityManifest",
     "probe_device",
+    "resolve_runtime",
 ]

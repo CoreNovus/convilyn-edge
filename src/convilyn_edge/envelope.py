@@ -8,8 +8,8 @@ cross-device correlation possible (replay is a first-class feature).
 Data-flow consistency (a binding principle): there is exactly ONE envelope
 shape. The per-scenario typed payload lives in ``EventEnvelope.data`` and is
 validated by a ``Normalizer``'s ``Canonical`` type downstream — the envelope is
-never parameterized per scenario. The retail Solution Pack rides this shell; so
-would a factory / medical / access-control pack, unchanged.
+never parameterized per scenario. Any vertical Solution Pack — factory, medical,
+access-control — rides this same shell, unchanged.
 
 ``Correlation.trace_id`` is a W3C-canonical 32-hex string taken from the active
 span (the same observability convention the Convilyn cloud uses) *by shape only*

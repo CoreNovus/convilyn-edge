@@ -3,9 +3,9 @@
 A Source is where events *enter* the SDK: a scanner adapter, a serial port, an
 MQTT subscription, a camera. v0.1 ships no real hardware Source — the supported
 boundary (Convilyn ships SPI + simulator + reference adapter only, never
-hardware drivers; real drivers are integrator work). The retail Solution Pack's ``SimulatedScannerSource``
-and any real ``OposScannerSource`` / ``DataWedgeSource`` an integrator writes are
-substitutable behind this one Protocol (LSP).
+hardware drivers; real drivers are integrator work). The built-in simulator's
+``SimulatedSource`` and any real ``OposScannerSource`` / ``DataWedgeSource``
+an integrator writes are substitutable behind this one Protocol (LSP).
 
 Design notes:
 

@@ -1,11 +1,11 @@
 """Primitive 3/7 — ``StateProvider``.
 
 Supplies the *environment state* at the moment an event fires — the context a
-deterministic rule needs but the event itself does not carry. In the retail POC
-that is ``PosState`` (stage: item_entry / payment / …, recent scans, whether the
-product-lookup service is up). Swap the implementation and the same primitive
-serves factory machine state, vehicle telemetry, an access-control system's
-state — the whole generalization thesis of this primitive.
+deterministic rule needs but the event itself does not carry (e.g. a checkout
+stage, recent events, whether a lookup service is up). Swap the implementation
+and the same primitive serves POS checkout state, factory machine state,
+vehicle telemetry, an access-control system's state — the whole generalization
+thesis of this primitive.
 
 **Async, generic.** ``snapshot`` may read a POS bus, a local store, or a socket,
 so it is ``async``. Generic over the state type ``T`` and therefore NOT

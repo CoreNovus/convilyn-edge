@@ -38,6 +38,7 @@ from convilyn_edge.spi.operator import (
     OperatorError,
 )
 from convilyn_edge.spi.review import (
+    DecisionSource,
     DefaultAction,
     HumanReview,
     ReviewChoice,
@@ -82,6 +83,7 @@ __all__ = [
     "ReviewOutcome",
     "DefaultAction",
     "ReviewDecision",
+    "DecisionSource",
     # 7. ActionSink
     "ActionSink",
     "ActionDescriptor",

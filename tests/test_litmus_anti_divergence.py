@@ -1,18 +1,18 @@
 """The anti-divergence litmus — the SDK's reason to exist, as a committed lint.
 
-Reference-architecture line 1893: *"delete the whole Retail Solution Pack; does
-the remaining SDK still let you build another IoT AI workflow?"* If yes, this is a
-general substrate; if no, a barcode product with a POC baked into its core. These
-tests pin that answer at CI time:
+The removability question: *"delete an entire vertical Solution Pack; does the
+remaining SDK still let you build another IoT AI workflow?"* If yes, this is a
+general substrate; if no, a vertical product with a POC baked into its core.
+These tests pin that answer at CI time:
 
 1. The substrate carries **no scenario vocabulary in its control flow** — no
    ``if … barcode/cashier/scanner/…`` branch anywhere in ``convilyn_edge`` (the
    grep-observable of ``generic-tools-agent-orchestration.md``, promoted to a
    committed check).
 2. The substrate has **no reverse dependency** on any Solution Pack — importing
-   ``convilyn_edge`` never pulls in ``convilyn_retail_cashier``.
-3. A **generic (non-retail) workflow builds + runs** against the simulator using
-   ONLY ``convilyn_edge`` — a factory over-temperature alarm, zero retail imports.
+   ``convilyn_edge`` never pulls in any other ``convilyn*`` package.
+3. A **generic workflow builds + runs** against the simulator using ONLY
+   ``convilyn_edge`` — a factory over-temperature alarm, zero scenario imports.
 
 These run in the edge package's own test env, where no Solution Pack is installed
 — so the "pack absent" precondition is real, not mocked.
@@ -65,8 +65,12 @@ def test_no_scenario_branch_in_substrate():
 
 def test_substrate_does_not_import_a_solution_pack():
     # importing convilyn_edge (already done at module load) must not have pulled
-    # in any solution pack.
-    leaked = [m for m in sys.modules if m.startswith("convilyn_retail")]
+    # in any solution pack or any other convilyn package.
+    leaked = [
+        m
+        for m in sys.modules
+        if m.startswith("convilyn") and not (m == "convilyn_edge" or m.startswith("convilyn_edge."))
+    ]
 
     assert leaked == []
 
@@ -105,7 +109,7 @@ class _AlarmSink:
         return ActionResult(status="performed", output=None)
 
 
-async def test_generic_workflow_runs_against_simulator_without_retail():
+async def test_generic_workflow_runs_against_simulator_with_substrate_only():
     # A factory machine-alarm workflow — Source → Normalizer → DeterministicOperator
     # → ActionSink — composed from convilyn_edge alone, driven by the simulator.
     scenario = Scenario.from_dict(

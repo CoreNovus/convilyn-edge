@@ -8,23 +8,15 @@ are honest "build your own edge workflow" starting points.
 pip install --pre convilyn-edge
 ```
 
-## `simulate_barcode.py` — the hello-world
+## `drive_pipeline.py` — the hello-world
 
-Author a barcode-scan scenario in code and stream it through the built-in device
-simulator (`SimulatedSource`, the first concrete `EventSource`). Prints each
-`EventEnvelope` as the exact wire-JSON a real scanner adapter would emit.
-
-```bash
-python examples/simulate_barcode.py
-```
-
-## `barcode_scenario.json` — the CLI equivalent
-
-The same scans as a scenario file, replayed through the `convilyn-edge` CLI (no
-Python glue needed):
+Author a scenario in code and stream it through the built-in device simulator
+(`SimulatedSource`, the first concrete `EventSource`), then fold the events through a
+`Pipeline`. Prints each `EventEnvelope` as the exact wire-JSON a real device adapter
+would emit — no hardware needed.
 
 ```bash
-convilyn-edge simulate examples/barcode_scenario.json --no-delay
+python examples/drive_pipeline.py
 ```
 
 ## Scaffolding your own adapter / workflow
@@ -32,16 +24,14 @@ convilyn-edge simulate examples/barcode_scenario.json --no-delay
 The CLI generates skeletons that implement the SPI Protocols:
 
 ```bash
-convilyn-edge init adapter zebra-datawedge     # a device adapter (EventSource)
-convilyn-edge init workflow cashier-guidance   # a workflow skeleton
+convilyn-edge init adapter my-sensor       # a device adapter (EventSource)
+convilyn-edge init workflow my-workflow    # a workflow skeleton
 ```
 
 ## Building a full vertical
 
-For an end-to-end workflow composition — a barcode scanner driving three retail
-workflows into POS action sinks — see the **retail Solution Pack** and its
-`examples/three_stage_retail.py`, which builds on this SPI:
-
-```bash
-pip install --pre convilyn-solution-retail-cashier
-```
+An end-to-end vertical composes exactly these primitives: an `EventSource` adapter
+feeding envelopes into workflows that write to `ActionSink`s. Ship that composition as
+its own **removable** Solution Pack package that depends on `convilyn-edge` — never as
+scenario logic inside the SPI. The flagship reference Solution Pack is **pet-monitoring**
+(see `backend-api/docs/engineering/edge_solution_pack_moat_and_lockin.md`).

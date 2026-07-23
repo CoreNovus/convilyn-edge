@@ -42,6 +42,23 @@ def _default_key_of(record: Mapping[str, Any]) -> str:
     return record["idempotency_key"]
 
 
+def _open_no_follow(path: Path, *, append: bool):
+    """Open ``path`` for text write, refusing to follow a symlink at the leaf.
+
+    Uses ``O_NOFOLLOW`` (POSIX) so a pre-planted symlink at the queue path — e.g. one a
+    local attacker dropped on a shared / removable mount pointing at ``~/.ssh/authorized_keys``
+    or ``/etc/…`` — makes the open fail (``ELOOP``) instead of the durable append writing
+    *through* the link to an arbitrary file. Mirrors the SDK's write posture elsewhere
+    (``bundle/staging.py`` / ``install.py`` / ``verify.py``). The flag is absent on Windows
+    (``getattr(..., 0)``), where this degrades to a plain open; new files are ``0o600``.
+    Text mode + UTF-8 keeps byte-for-byte parity with the previous ``Path.open`` write.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    flags |= os.O_APPEND if append else os.O_TRUNC
+    fd = os.open(path, flags, 0o600)
+    return os.fdopen(fd, "a" if append else "w", encoding="utf-8")
+
+
 @dataclass
 class DurableQueue:
     """A JSONL-backed, idempotent FIFO queue of pending records.
@@ -108,7 +125,7 @@ class DurableQueue:
         if key in self._keys_index():
             return False
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
+        with _open_no_follow(self.path, append=True) as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         self._keys_index().add(key)
         return True
@@ -138,7 +155,7 @@ class DurableQueue:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         body = "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in materialised)
-        with tmp.open("w", encoding="utf-8") as handle:
+        with _open_no_follow(tmp, append=False) as handle:
             handle.write(body)
             handle.flush()
             os.fsync(handle.fileno())

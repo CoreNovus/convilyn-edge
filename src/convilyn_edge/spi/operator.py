@@ -1,14 +1,15 @@
 """Primitive 4/7 — ``DeterministicOperator``.
 
 Runs a rule, a format check, a state-machine transition, a debounce, an
-aggregation — anything whose output is a pure, reproducible function of its input
-and context. In the retail POC this is the ``BarcodeStageRuleEngine`` (its rule
-table maps item-entry + payment-code → "go to payment first", etc.).
+aggregation — anything whose output is a pure, reproducible function of its
+input and context (e.g. a Solution Pack's stage rule table mapping an event +
+device state to a fixed instruction).
 
 **This layer must never call an LLM.** That is the whole point of separating it
 from ``ModelOperator`` — it is the SDK expression of the principle that
-deterministic layers never call a model. Scenario rules live in a *removable* Solution Pack, never in the
-substrate, and never as ``if scenario == ...`` branches inside a shared operator.
+deterministic layers never call a model. Scenario rules live in a *removable*
+Solution Pack, never in the substrate, and never as ``if scenario == ...``
+branches inside a shared operator.
 
 **Sync signature — a type-level guarantee.** The
 original sketch has ``execute`` as ``async``; we tighten it to sync so "no I/O, no

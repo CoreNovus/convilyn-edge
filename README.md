@@ -12,10 +12,10 @@ for building auditable, offline-capable edge/IoT AI workflows.
 > across the 0.1 beta series: the `client_compute` on-device model keystone
 > (`convilyn_edge.clientcompute`), the durable offline queue + emitter
 > (`convilyn_edge.offline`), the device simulator + `convilyn-edge` CLI
-> (`convilyn_edge.simulator` / `.cli`), and a capability `probe`. The removable
-> retail Solution Pack ships as its own package
-> (`convilyn-solution-retail-cashier`). Each section below documents the module
-> as it exists in this release.
+> (`convilyn_edge.simulator` / `.cli`), and a capability `probe`. Vertical
+> scenario logic ships as removable Solution Packs built on this SPI — never
+> inside this package. Each section below documents the module as it exists in
+> this release.
 
 ## What this is (and is not)
 
@@ -25,7 +25,7 @@ Convilyn splits an edge AI product into three planes:
 |---|---|
 | **AI Workflow Plane** — SOP lookup, explain, re-ground, HITL, escalate, gated tools + the 7 server-enforced safety checks | the Convilyn cloud service |
 | **Device Data Plane + Edge Runtime + adapter/provider SPI** | **this package (`convilyn-edge`)** |
-| **Vertical logic** — the barcode rules, POS state, workflows | a *removable* Solution Pack (`solution-retail-cashier`) |
+| **Vertical logic** — scenario rules, device state, workflows | a *removable* Solution Pack (its own package, built on this SPI) |
 
 Convilyn ships the **SPI + a simulator + reference adapters only** — never
 hardware drivers or action connectors. Real OPOS/.NET, Zebra/Kotlin, serial /
@@ -129,8 +129,8 @@ scenario through the built-in simulator:
 
 ```bash
 convilyn-edge simulate scenario.json --no-delay    # prints one wire-JSON envelope per event
-convilyn-edge init adapter zebra-datawedge         # scaffold a device adapter
-convilyn-edge init workflow cashier-guidance       # scaffold a workflow
+convilyn-edge init adapter my-sensor               # scaffold a device adapter
+convilyn-edge init workflow my-workflow            # scaffold a workflow
 ```
 
 A scenario declares a device and an ordered list of events (each with an optional
@@ -150,7 +150,7 @@ with the workflow executor; `simulate --no-delay` is the deterministic replay.)
 
 ## The removability check
 
-> Delete the entire retail Solution Pack. Does the remaining SDK still let you
+> Delete an entire vertical Solution Pack. Does the remaining SDK still let you
 > build another IoT AI workflow?
 
 If yes, this is a general SDK — not a vertical wearing an SDK costume. That
@@ -163,7 +163,7 @@ uv add --prerelease=allow convilyn-edge   # or: pip install --pre convilyn-edge
 ```
 
 Python ≥ 3.10. Zero runtime dependencies. Runnable examples live in
-[`examples/`](./examples/) — start with `examples/simulate_barcode.py`.
+[`examples/`](./examples/) — start with `examples/drive_pipeline.py`.
 
 ## License
 

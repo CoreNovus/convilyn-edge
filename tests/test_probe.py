@@ -5,8 +5,9 @@ The probe detects the host it runs on and produces a reportable
 file, cpuinfo, ``nvidia-smi``) so a test can monkeypatch them without real
 hardware. Covers:
 
-* **Logic** — a Jetson file present → ``jetson_orin`` (+ NPU); a Qualcomm cpuinfo
-  marker → ``snapdragon_x`` (+ NPU); neither → ``generic_<machine>`` (no NPU).
+* **Logic** — a Jetson file present → ``jetson_orin`` (NPU defaults False: the
+  Orin family splits Nano/NX on DLA and the probe can't disambiguate); a Qualcomm
+  cpuinfo marker → ``snapdragon_x`` (+ NPU); neither → ``generic_<machine>`` (no NPU).
 * **Boundary** — ``nvidia-smi`` present → ``vram_mb`` parsed; absent → ``None``.
 * **Error** — every probe degrades gracefully (an OSError reading a source, a
   failed ``nvidia-smi``) and ``probe_device`` never raises.
@@ -20,6 +21,7 @@ No network, no real hardware, stdlib only.
 from __future__ import annotations
 
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -68,12 +70,14 @@ def test_jetson_release_file_present_detects_jetson(monkeypatch, tmp_path):
     assert manifest.silicon == "jetson_orin"
 
 
-def test_jetson_detected_reports_npu(monkeypatch, tmp_path):
+def test_jetson_detected_defaults_no_npu(monkeypatch, tmp_path):
+    # Tegra can't distinguish an Orin Nano (no DLA) from an NX (2× DLA), so has_npu
+    # conservatively defaults to False; a DLA-bearing Orin sets it on its own manifest.
     tegra = tmp_path / "nv_tegra_release"
     tegra.write_text("R35\n", encoding="utf-8")
     monkeypatch.setattr(probe_mod, "_TEGRA_RELEASE", tegra)
 
-    assert probe_device(device_id="dev-1").has_npu is True
+    assert probe_device(device_id="dev-1").has_npu is False
 
 
 def test_qualcomm_cpuinfo_detects_snapdragon(monkeypatch, tmp_path):
@@ -114,6 +118,55 @@ def test_nvidia_smi_absent_yields_none_vram():
 def test_ram_mb_is_always_positive():
     # os.sysconf is absent on non-POSIX hosts; the probe must still report ram_mb > 0.
     assert probe_device(device_id="dev-6").ram_mb > 0
+
+
+# ── storage fields (#2791) ───────────────────────────────────────────────────
+
+
+def test_disk_gb_reports_total_in_gib(monkeypatch):
+    monkeypatch.setattr(
+        probe_mod.shutil, "disk_usage", lambda _: SimpleNamespace(total=100 * 1024**3)
+    )
+
+    assert probe_device(device_id="dev-disk").disk_gb == 100
+
+
+def test_to_wire_emits_non_default_storage_triple():
+    manifest = DeviceCapabilityManifest(
+        device_id="d",
+        silicon="jetson_orin",
+        ram_mb=8192,
+        disk_gb=64,
+        removable=True,
+        media_store="/mnt/sd",
+    )
+
+    wire = manifest.to_wire()
+
+    assert (wire["disk_gb"], wire["removable"], wire["media_store"]) == (64, True, "/mnt/sd")
+
+
+def test_disk_gb_none_when_disk_usage_fails(monkeypatch):
+    def _boom(_):
+        raise OSError("no such path")
+
+    monkeypatch.setattr(probe_mod.shutil, "disk_usage", _boom)
+
+    assert probe_device(device_id="dev-disk").disk_gb is None
+
+
+def test_removable_and_media_store_come_from_args():
+    manifest = probe_device(device_id="dev-sd", removable=True, media_store="/mnt/sdcard")
+
+    assert (manifest.removable, manifest.media_store) == (True, "/mnt/sdcard")
+
+
+def test_storage_fields_default_when_not_supplied(monkeypatch):
+    monkeypatch.setattr(probe_mod.shutil, "disk_usage", lambda _: SimpleNamespace(total=1024**3))
+
+    manifest = probe_device(device_id="dev-def")
+
+    assert (manifest.removable, manifest.media_store) == (False, None)
 
 
 def test_ram_mb_uses_sysconf_when_available(monkeypatch):
@@ -192,6 +245,9 @@ def test_to_wire_is_the_backend_snake_case_shape():
         "ram_mb": 8192,
         "vram_mb": None,
         "has_npu": True,
+        "disk_gb": None,
+        "removable": False,
+        "media_store": None,
         "installed_assets": [
             {
                 "capability": "llm",

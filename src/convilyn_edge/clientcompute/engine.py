@@ -101,7 +101,11 @@ def _parse_json_object(raw: str) -> dict[str, Any]:
 
 
 def build_extract_messages(
-    prompt: str, sources: Mapping[str, str], required_anchors: Sequence[str]
+    prompt: str,
+    sources: Mapping[str, str],
+    required_anchors: Sequence[str],
+    *,
+    field_guidance: Mapping[str, str] | None = None,
 ) -> list[dict[str, str]]:
     """Compose the chat messages for the extractor role.
 
@@ -110,17 +114,36 @@ def build_extract_messages(
     each appear **verbatim** in a source (or the sentinel). The device grounds the
     result afterwards regardless — this instruction just steers the model toward
     values that will survive grounding.
+
+    ``field_guidance`` optionally overrides the answer rule **per key** (generic
+    data — any caller may pass it): a key with guidance is steered by its own
+    rule line instead of the blanket verbatim instruction. This is how a
+    manufactured contract's ``closed_set`` fields (answers that legitimately
+    never appear verbatim in the source — see
+    :func:`convilyn_edge.authored.contract.guidance_from_contract`) are steered
+    toward their authored labels. With no guidance the message is byte-identical
+    to the v1 interrupt-flow shape.
     """
+    guidance = field_guidance or {}
     source_xml = "\n\n".join(
         f'<source name="{name}">\n{text}\n</source>' for name, text in sources.items()
     )
-    required_lines = "\n".join(f"  - {key}" for key in required_anchors)
+    required_lines = "\n".join(
+        f"  - {key} — {guidance[key]}" if key in guidance else f"  - {key}"
+        for key in required_anchors
+    )
+    verbatim_rule = (
+        "Unless a key states its own answer rule above, every value MUST appear "
+        "verbatim in at least one <source> block above.\n"
+        if guidance
+        else "Every value MUST appear verbatim in at least one <source> block above.\n"
+    )
     user_text = (
         f"{source_xml}\n\n"
         "<extract_request>\n"
         "Emit ONE strict JSON object with EXACTLY these keys (no extras):\n"
         f"{required_lines}\n\n"
-        "Every value MUST appear verbatim in at least one <source> block above.\n"
+        f"{verbatim_rule}"
         f'If a value is genuinely absent from all sources, set it to "{MISSING_SENTINEL}" '
         "— do NOT invent.\n"
         "Output: raw JSON only. No prose. No markdown fence.\n"
@@ -147,6 +170,11 @@ class HttpLocalExtractor:
     api_key: str | None = None
     timeout: float = 600.0
     transport: Transport = _urllib_post_json
+    #: Optional per-key answer-rule overrides passed through to
+    #: :func:`build_extract_messages` (e.g. a manufactured contract's
+    #: ``closed_set`` label sets via ``guidance_from_contract``). ``None`` keeps
+    #: the v1 verbatim-only message byte-identical.
+    field_guidance: Mapping[str, str] | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str], *, model: str | None = None) -> HttpLocalExtractor:
@@ -223,7 +251,9 @@ class HttpLocalExtractor:
         sources: Mapping[str, str],
         required_anchors: Sequence[str],
     ) -> Mapping[str, Any]:
-        messages = build_extract_messages(prompt, sources, required_anchors)
+        messages = build_extract_messages(
+            prompt, sources, required_anchors, field_guidance=self.field_guidance
+        )
         url, body = self._request(messages)
         response = self.transport(url, body, self._headers(), self.timeout)
         return _parse_json_object(_strip_think(self._content(response)))

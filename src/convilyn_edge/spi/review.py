@@ -1,9 +1,9 @@
 """Primitive 6/7 — ``HumanReview``.
 
 A structured human-in-the-loop request: a titled prompt, a fixed set of
-``choices``, and a ``default_action`` for when nobody answers. In the retail POC
-this is the "suspected duplicate scan — [only one] / [there are two] / [escalate]"
-card. The response is a *typed* outcome, never free-form text
+``choices``, and a ``default_action`` for when nobody answers — e.g. a
+"suspected duplicate event — [keep one] / [keep both] / [escalate]" card.
+The response is a *typed* outcome, never free-form text
 the workflow has to re-parse.
 
 A real implementation is the device-side face of the Convilyn cloud's existing
@@ -21,6 +21,14 @@ from typing import Literal, Protocol, runtime_checkable
 
 DefaultAction = Literal["stop", "escalate", "continue"]
 ReviewDecision = Literal["stop", "escalate", "continue", "selected"]
+
+#: Where a resolved decision came from. ``human`` — a person actually answered. ``expiry_default``
+#: — nobody answered by ``expires_at`` and the runtime synthesized the request's
+#: ``default_action`` (see ``runtime.watchdog.resolve_review``). This is a **structured** signal,
+#: not a note substring: a pack that gates a downstream action on human approval MUST require
+#: ``decision_source == "human"`` (or ``decision == "selected"``), never merely "the review did
+#: not stop" — a timeout must never be mistaken for a human grant (error-routing zone 7).
+DecisionSource = Literal["human", "expiry_default"]
 
 
 @dataclass(frozen=True)
@@ -53,12 +61,16 @@ class ReviewOutcome:
 
     ``decision`` is ``"selected"`` when the operator picked a choice (``choice_id``
     set), otherwise the ``default_action`` that fired on expiry / dismissal.
+    ``decision_source`` discriminates a real human answer (``"human"``, the default)
+    from a runtime-synthesized timeout default (``"expiry_default"``) — a structured
+    field an approval gate must consult rather than parsing ``note``.
     """
 
     decision: ReviewDecision
     choice_id: str | None = None
     note: str | None = None
     responded_at: str | None = None
+    decision_source: DecisionSource = "human"
 
 
 @runtime_checkable
@@ -73,6 +85,7 @@ class HumanReview(Protocol):
 __all__ = [
     "DefaultAction",
     "ReviewDecision",
+    "DecisionSource",
     "ReviewChoice",
     "ReviewRequest",
     "ReviewOutcome",

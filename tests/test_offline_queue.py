@@ -2,13 +2,35 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+import pytest
 
 from convilyn_edge.offline.queue import DurableQueue, FlushReport
 
 
 def _queue(tmp_path: Path) -> DurableQueue:
     return DurableQueue(tmp_path / "q.jsonl", key_of=lambda r: r["id"])
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="O_NOFOLLOW is POSIX-only")
+def test_enqueue_refuses_to_append_through_a_symlink(tmp_path):
+    # A planted symlink at the queue path (e.g. on a shared / removable mount) must not
+    # let the durable append write THROUGH it to an arbitrary file.
+    victim = tmp_path / "victim"
+    victim.write_text("original")
+    qpath = tmp_path / "q.jsonl"
+    try:
+        os.symlink(victim, qpath)
+    except (OSError, NotImplementedError):
+        pytest.skip("cannot create a symlink in this environment")
+    queue = DurableQueue(qpath, key_of=lambda r: r["id"])
+
+    with pytest.raises(OSError):
+        queue.enqueue({"id": "a"})
+
+    assert victim.read_text() == "original"  # the append never followed the link
 
 
 # ── logic ────────────────────────────────────────────────────────────────────

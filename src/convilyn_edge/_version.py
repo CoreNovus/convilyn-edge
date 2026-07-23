@@ -12,4 +12,4 @@ Core API + SPI version. Bump in CHANGELOG-bumping commits; never edit a
 hardcoded constant in two places.
 """
 
-__version__ = "0.1.0b6"
+__version__ = "0.1.0b19"

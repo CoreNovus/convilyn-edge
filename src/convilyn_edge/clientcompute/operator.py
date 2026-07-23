@@ -19,8 +19,10 @@ The result is always a typed :class:`ModelResult`, never raw natural language:
 from __future__ import annotations
 
 import asyncio
+import functools
 import time
 from collections.abc import Mapping, Sequence
+from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -51,10 +53,13 @@ class EdgeModelOperator:
         *,
         model_id: str = "edge-local",
         model_version: str = "0",
+        executor: Executor | None = None,
     ) -> None:
         self._extractor = extractor
         self._model_id = model_id
         self._model_version = model_version
+        self._executor = executor
+        self._owned_executor: ThreadPoolExecutor | None = None
 
     async def infer(
         self,
@@ -84,24 +89,57 @@ class EdgeModelOperator:
         grounded = ground_anchors(raw, input.required_anchors, input.sources, input.contract)
         return self._result(grounded, input, started)
 
-    async def _run(self, input: ExtractInput, deadline_ms: int | None) -> Mapping[str, Any]:
-        """Run the (blocking) extractor off the event loop, honouring a deadline.
+    def close(self) -> None:
+        """Shut down the owned bounded executor (no-op for a shared one)."""
+        if self._owned_executor is not None:
+            self._owned_executor.shutdown(wait=False, cancel_futures=True)
+            self._owned_executor = None
 
-        Limitation: a synchronous ``extract()`` cannot be cancelled, so on
-        ``deadline_ms`` the coroutine returns (→ ``unavailable``) but the thread
-        runs to completion in the default executor. A caller that expects
-        frequent timeouts against a slow local model should give the extractor a
-        dedicated bounded executor rather than the shared default pool.
+    def __enter__(self) -> EdgeModelOperator:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    async def __aenter__(self) -> EdgeModelOperator:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        self.close()
+
+    async def _run(self, input: ExtractInput, deadline_ms: int | None) -> Mapping[str, Any]:
+        """Run the (blocking) extractor on a **bounded** executor, honouring a deadline.
+
+        A synchronous ``extract()`` cannot be cancelled: on ``deadline_ms`` the
+        coroutine returns (→ ``unavailable``) while the worker thread runs to
+        completion. The default per-operator single-thread executor bounds that
+        leak to one thread (a slow local model — e.g. a Jetson cold-load — can
+        no longer stack a new thread per timeout); a subsequent ``infer`` queues
+        behind it, which is honest backpressure. Pass a shared ``executor`` to
+        pool across operators instead.
         """
-        call = asyncio.to_thread(
-            self._extractor.extract,
-            prompt=input.prompt,
-            sources=input.sources,
-            required_anchors=input.required_anchors,
+        loop = asyncio.get_running_loop()
+        call = loop.run_in_executor(
+            self._bound_executor(),
+            functools.partial(
+                self._extractor.extract,
+                prompt=input.prompt,
+                sources=input.sources,
+                required_anchors=input.required_anchors,
+            ),
         )
         if deadline_ms is not None:
             return await asyncio.wait_for(call, timeout=deadline_ms / 1000)
         return await call
+
+    def _bound_executor(self) -> Executor:
+        if self._executor is not None:
+            return self._executor
+        if self._owned_executor is None:
+            self._owned_executor = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix=f"edge-model-{self._model_id}"
+            )
+        return self._owned_executor
 
     def _result(
         self, grounded: dict[str, str], input: ExtractInput, started: float

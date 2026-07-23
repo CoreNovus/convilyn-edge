@@ -16,8 +16,9 @@ policy engine — deterministic, never an LLM — can gate them:
 * ``R3`` money / safety / person (payment, unlock, shutdown) — forced
   authorization **and** human confirmation.
 
-**Supported boundary (locked decision).** Convilyn ships only R0/R1 *reference* sinks
-(``DisplayInstructionSink``, ``CreateHelpRequestSink`` in the retail pack).
+**Supported boundary (locked decision).** Convilyn ships only R0/R1 *reference*
+sinks (e.g. a display-an-instruction or create-a-help-request sink in a
+Solution Pack).
 Everything R2+ — and all real hardware actuation — is an integrator/community
 adapter, never shipped by Convilyn. "denied" is a first-class outcome, not an
 error, so ``ActionResult`` is its own shape, not a

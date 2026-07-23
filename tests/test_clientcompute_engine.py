@@ -58,6 +58,28 @@ def test_messages_user_turn_lists_required_keys():
     assert "- title" in messages[1]["content"] and "- company" in messages[1]["content"]
 
 
+def test_no_guidance_keeps_the_v1_blanket_verbatim_rule():
+    messages = build_extract_messages("SYS", {"f": "text"}, ["a"])
+
+    assert "Every value MUST appear verbatim" in messages[1]["content"]
+
+
+def test_field_guidance_renders_the_per_key_rule():
+    messages = build_extract_messages(
+        "SYS", {"f": "text"}, ["zone"], field_guidance={"zone": "answer with EXACTLY one of: a | b"}
+    )
+
+    assert "- zone — answer with EXACTLY one of: a | b" in messages[1]["content"]
+
+
+def test_field_guidance_scopes_the_verbatim_rule_to_unguided_keys():
+    messages = build_extract_messages(
+        "SYS", {"f": "text"}, ["zone", "quote"], field_guidance={"zone": "rule"}
+    )
+
+    assert "Unless a key states its own answer rule" in messages[1]["content"]
+
+
 # ── HttpLocalExtractor.extract ───────────────────────────────────────────────
 
 

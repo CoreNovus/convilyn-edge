@@ -30,6 +30,35 @@ runtime dependencies are zero.
 from __future__ import annotations
 
 from convilyn_edge._version import __version__
+from convilyn_edge.bundle import (
+    ArtifactFetcher,
+    ArtifactKind,
+    DeviceInstallablePayload,
+    DigestMismatchError,
+    FetchError,
+    IncompleteBundleError,
+    InstallAction,
+    InstalledArtifact,
+    InstallError,
+    InstallReport,
+    MissingDigestError,
+    ResolvedArtifact,
+    StagedArtifact,
+    StagedArtifactUnreadableError,
+    StagedBundle,
+    UnsupportedDigestError,
+    UrllibArtifactFetcher,
+    VerificationError,
+    VerificationStatus,
+    VerifiedArtifact,
+    VerifiedBundle,
+    fetch_to_bytes,
+    install_verified_bundle,
+    merge_installed_assets,
+    stage_bundle,
+    verify_staged_artifact,
+    verify_staged_bundle,
+)
 from convilyn_edge.envelope import (
     SPEC_VERSION,
     Correlation,
@@ -43,6 +72,7 @@ from convilyn_edge.probe import (
     InstalledAsset,
     QualityTier,
     probe_device,
+    resolve_runtime,
 )
 from convilyn_edge.result import Err, Ok, Result
 from convilyn_edge.spi import (
@@ -51,6 +81,7 @@ from convilyn_edge.spi import (
     ActionResult,
     ActionSink,
     ActionStatus,
+    DecisionSource,
     DefaultAction,
     DeterministicOperator,
     DeviceHealth,
@@ -75,6 +106,12 @@ from convilyn_edge.spi import (
     SourceContext,
     StateProvider,
 )
+from convilyn_edge.storage import (
+    LocalStorageProvider,
+    StorageProvider,
+    StorageTier,
+    select_storage_provider,
+)
 
 __all__ = [
     "__version__",
@@ -88,8 +125,42 @@ __all__ = [
     "Correlation",
     "new_envelope",
     "SPEC_VERSION",
+    # Bundle consumption (Path B: pull → stage → verify)
+    "DeviceInstallablePayload",
+    "ResolvedArtifact",
+    "ArtifactKind",
+    "ArtifactFetcher",
+    "UrllibArtifactFetcher",
+    "FetchError",
+    "fetch_to_bytes",
+    "StagedArtifact",
+    "StagedBundle",
+    "stage_bundle",
+    "VerificationStatus",
+    "VerificationError",
+    "DigestMismatchError",
+    "UnsupportedDigestError",
+    "MissingDigestError",
+    "StagedArtifactUnreadableError",
+    "IncompleteBundleError",
+    "VerifiedArtifact",
+    "VerifiedBundle",
+    "verify_staged_artifact",
+    "verify_staged_bundle",
+    "InstallAction",
+    "InstallError",
+    "InstalledArtifact",
+    "InstallReport",
+    "install_verified_bundle",
+    "merge_installed_assets",
+    # Storage-selection axis (device durable-store tiers)
+    "StorageTier",
+    "StorageProvider",
+    "LocalStorageProvider",
+    "select_storage_provider",
     # Device-capability probe (multi-device IoT readiness)
     "probe_device",
+    "resolve_runtime",
     "DeviceCapabilityManifest",
     "InstalledAsset",
     "Capability",
@@ -122,6 +193,7 @@ __all__ = [
     "ReviewOutcome",
     "DefaultAction",
     "ReviewDecision",
+    "DecisionSource",
     # SPI — 7. ActionSink
     "ActionSink",
     "ActionDescriptor",

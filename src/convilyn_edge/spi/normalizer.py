@@ -2,8 +2,8 @@
 
 Turns a vendor-specific raw payload into a canonical, schema-validated event.
 Zebra, Honeywell and OPOS all emit different byte/intent shapes; each vendor's
-Normalizer maps its ``Raw`` to the *same* ``Canonical`` (the retail pack's
-``BarcodeEvent``), so everything downstream is vendor-agnostic.
+Normalizer maps its ``Raw`` to the *same* ``Canonical`` event type, so
+everything downstream is vendor-agnostic.
 
 **Sync + ``Result``, not async + raise.** Normalization is a pure CPU transform
 (parse bytes → struct); it does no I/O, so the signature is synchronous. A bad

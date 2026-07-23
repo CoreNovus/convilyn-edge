@@ -130,3 +130,27 @@ async def test_model_id_is_reported():
     result = await op.infer(_input(), schema=_SCHEMA)
 
     assert result.model_id == "qwen3:4b"
+
+
+# ── object-state: bounded executor lifecycle ─────────────────────────────────
+
+
+async def test_infer_after_close_recreates_the_bounded_executor():
+    op = EdgeModelOperator(_FakeExtractor({"title": "Staff Engineer"}))
+    await op.infer(_input(), schema=_SCHEMA)
+    op.close()
+
+    result = await op.infer(_input(), schema=_SCHEMA)
+
+    assert result.status == "success"
+
+
+async def test_close_leaves_a_shared_executor_running():
+    from concurrent.futures import ThreadPoolExecutor
+
+    shared = ThreadPoolExecutor(max_workers=1)
+    op = EdgeModelOperator(_FakeExtractor({"title": "Staff Engineer"}), executor=shared)
+    await op.infer(_input(), schema=_SCHEMA)
+    op.close()
+
+    assert shared.submit(lambda: 1).result() == 1

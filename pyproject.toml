@@ -67,12 +67,15 @@ path = "src/convilyn_edge/_version.py"
 packages = ["src/convilyn_edge"]
 
 [tool.hatch.build.targets.sdist]
-# Ship CHANGELOG + tests in the sdist so source-install workflows get the
-# full surface. The wheel stays lean — README is bundled in METADATA
-# (rendered on PyPI); LICENSE is picked up via `license-files`.
+# Ship CHANGELOG + tests + the reference Solution Pack (examples/) in the
+# sdist so source-install workflows get the full surface — the pet pack is the
+# integrator's scaffold template, so it must travel with the source. The wheel
+# stays lean — README is bundled in METADATA (rendered on PyPI); LICENSE is
+# picked up via `license-files`.
 include = [
     "src/convilyn_edge",
     "tests",
+    "examples",
     "CHANGELOG.md",
     "LICENSE",
     "pyproject.toml",
