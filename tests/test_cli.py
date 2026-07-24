@@ -97,10 +97,25 @@ def test_init_adapter_creates_src_dir(tmp_path):
     assert (tmp_path / "adapters" / "zebra" / "src").is_dir()
 
 
-def test_init_workflow_creates_manifest(tmp_path):
+def test_init_workflow_creates_pipeline_module(tmp_path):
     main(["init", "workflow", "cashier", "--path", str(tmp_path)])
 
-    assert (tmp_path / "workflows" / "cashier" / "workflow.yaml").is_file()
+    assert (tmp_path / "workflows" / "cashier" / "workflow.py").is_file()
+
+
+def test_init_workflow_scaffold_composes_a_pipeline(tmp_path):
+    main(["init", "workflow", "cashier", "--path", str(tmp_path)])
+
+    source = (tmp_path / "workflows" / "cashier" / "workflow.py").read_text(encoding="utf-8")
+    assert 'Pipeline("cashier")' in source
+
+
+def test_init_workflow_no_longer_emits_a_dead_manifest(tmp_path):
+    # b20 scaffolded a workflow.yaml (kind: EdgeWorkflow) that nothing in the
+    # SDK consumed — an integrator following the scaffold ended at a dead end.
+    main(["init", "workflow", "cashier", "--path", str(tmp_path)])
+
+    assert not (tmp_path / "workflows" / "cashier" / "workflow.yaml").exists()
 
 
 def test_init_workflow_refuses_to_clobber_existing(tmp_path):

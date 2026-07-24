@@ -35,6 +35,12 @@ Output = TypeVar("Output")
 
 Placement = Literal["edge", "cloud", "auto"]
 ModelStatus = Literal["success", "uncertain", "unavailable", "invalid"]
+#: Why a result degraded to ``unavailable`` — additive diagnosis, never a new
+#: status. ``server_unreachable`` (transport failed), ``deadline_exceeded``
+#: (the caller's ``deadline_ms`` elapsed), ``output_unparseable`` (the model
+#: responded but produced nothing usable — e.g. a reasoning model spent its
+#: whole token budget thinking), ``error`` (anything else).
+DegradeReason = Literal["server_unreachable", "deadline_exceeded", "output_unparseable", "error"]
 
 
 @dataclass(frozen=True)
@@ -68,6 +74,12 @@ class ModelResult(Generic[Output]):
     * ``invalid``   — output failed schema validation / re-grounding; discarded.
 
     ``output`` is populated only for ``success`` (and possibly ``uncertain``).
+
+    ``degrade_reason`` / ``degrade_detail`` are populated only for
+    ``unavailable`` — they say *why* the workflow is taking its fallback path
+    ("server unreachable" is operationally very different from "the model ran
+    and produced nothing parseable"), so an integrator's load-bearing test tier
+    can assert the AI actually ran instead of trusting a green fallback.
     """
 
     status: ModelStatus
@@ -77,6 +89,8 @@ class ModelResult(Generic[Output]):
     output: Output | None = None
     confidence: float | None = None
     evidence: tuple[Evidence, ...] = field(default_factory=tuple)
+    degrade_reason: DegradeReason | None = None
+    degrade_detail: str | None = None
 
 
 class ModelOperator(Protocol[Input, Output]):
@@ -105,6 +119,7 @@ __all__ = [
     "Output",
     "Placement",
     "ModelStatus",
+    "DegradeReason",
     "Evidence",
     "ModelResult",
     "ModelOperator",

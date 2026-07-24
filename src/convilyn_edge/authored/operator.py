@@ -28,10 +28,11 @@ import dataclasses
 import functools
 import os
 import time
+import warnings
 from collections.abc import Mapping
 from concurrent.futures import Executor, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from convilyn_edge.authored.contract import (
     GroundedContract,
@@ -40,11 +41,21 @@ from convilyn_edge.authored.contract import (
     load_contract,
 )
 from convilyn_edge.clientcompute.engine import (
+    ExtractorOutputError,
+    ExtractorTransportError,
     HttpLocalExtractor,
     LocalExtractor,
+    ModelAvailability,
     resolve_local_model_tag,
 )
-from convilyn_edge.spi.model import Evidence, ModelResult, Placement
+from convilyn_edge.spi.model import DegradeReason, Evidence, ModelResult, Placement
+from convilyn_edge.warmup import WarmupResult, warmup_runner
+
+#: Who wires ``closed_set`` steering onto a supplied extractor: ``"auto"``
+#: (default) injects the contract's guidance into a guidance-empty extractor
+#: and warns when it structurally can't; ``"caller"`` declares steering is
+#: caller-managed (use as-is, silently).
+Steering = Literal["auto", "caller"]
 
 
 class ContractModelOperator:
@@ -83,6 +94,12 @@ class ContractModelOperator:
         model_id: str | None = None,
         model_version: str | None = None,
         executor: Executor | None = None,
+        steering: Steering = "auto",
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        num_ctx: int | None = None,
+        reasoning: bool | None = None,
+        extra_body: Mapping[str, Any] | None = None,
     ) -> ContractModelOperator:
         """One line from a manufactured contract to a usable grounded operator.
 
@@ -98,14 +115,44 @@ class ContractModelOperator:
         steps an integrator would otherwise hand-write.
 
         Overrides: ``model`` replaces the resolved local model tag; ``env``
-        replaces ``os.environ``; ``extractor`` supplies a custom runner as-is
-        (steering is then the caller's choice); ``model_id`` /
-        ``model_version`` / ``executor`` pass through to the constructor.
+        replaces ``os.environ``; ``model_id`` / ``model_version`` /
+        ``executor`` pass through to the constructor. ``max_tokens`` /
+        ``temperature`` / ``num_ctx`` / ``reasoning`` / ``extra_body`` tune
+        generation on the env-built extractor (``None`` keeps each
+        :class:`HttpLocalExtractor` default); combining them with a supplied
+        ``extractor`` raises — those knobs belong on the extractor the caller
+        built.
+
+        A supplied ``extractor`` composes with steering instead of silently
+        dropping it: under ``steering="auto"`` (default) a guidance-empty
+        extractor with a ``field_guidance`` field gets the contract's
+        ``closed_set`` guidance injected (caller-set guidance is never
+        overwritten), and an extractor that structurally can't carry guidance
+        triggers a loud ``UserWarning`` — closed-set fields may never ground
+        without steering. ``steering="caller"`` declares steering is
+        caller-managed: use the extractor as-is, silently.
+
         A bad path or malformed contract fails loud (:func:`load_contract`) —
         this is sugar over the existing multi-step assembly, not a new layer.
         """
         contract = source if isinstance(source, GroundedContract) else load_contract(source)
+        generation = {
+            key: value
+            for key, value in {
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "num_ctx": num_ctx,
+                "reasoning": reasoning,
+                "extra_body": extra_body,
+            }.items()
+            if value is not None
+        }
         if extractor is None:
+            if steering == "caller":
+                raise ValueError(
+                    "steering='caller' requires a supplied extractor — the env-built "
+                    "extractor is always steered from the contract"
+                )
             resolved_model = model or (
                 resolve_local_model_tag(contract.model_binding) if contract.model_binding else None
             )
@@ -113,8 +160,16 @@ class ContractModelOperator:
                 os.environ if env is None else env, model=resolved_model
             )
             extractor = dataclasses.replace(
-                base, field_guidance=guidance_from_contract(contract)
+                base, field_guidance=guidance_from_contract(contract), **generation
             )
+        else:
+            if generation:
+                raise ValueError(
+                    "generation parameters configure the env-built extractor; set them on "
+                    f"the supplied extractor instead: {', '.join(sorted(generation))}"
+                )
+            if steering == "auto":
+                extractor = _wire_guidance(extractor, contract)
         return cls(
             extractor,
             contract,
@@ -127,6 +182,37 @@ class ContractModelOperator:
     def contract(self) -> GroundedContract:
         """The manufactured contract this operator executes."""
         return self._contract
+
+    def warmup(self, deadline_ms: int | None = None) -> WarmupResult:
+        """Pay the bound runner's cold start now — the three-state
+        cold≠offline report, forwarded to the held extractor.
+
+        Delegates to the extractor's ``warmup`` hook when it has one
+        (:class:`HttpLocalExtractor` does); an extractor without the hook
+        (e.g. an in-process runner with no load cost) honestly reports
+        already-warm (see :func:`convilyn_edge.warmup.warmup_runner`).
+        """
+        return warmup_runner(self._extractor, deadline_ms)
+
+    def health(self) -> str | None:
+        """``None`` when the held extractor reports no problem (or exposes no
+        ``health`` hook — nothing to report); else the human-actionable
+        problem string."""
+        hook = getattr(self._extractor, "health", None)
+        return hook() if callable(hook) else None
+
+    def model_available(self) -> ModelAvailability:
+        """Whether the contract's bound model is actually servable — forwarded
+        to the held extractor; an extractor without the hook reports
+        ``unknown`` (honest four-state, never a fabricated ``available``)."""
+        hook = getattr(self._extractor, "model_available", None)
+        if callable(hook):
+            return hook()
+        return ModelAvailability(
+            state="unknown",
+            model=self._model_id,
+            detail="extractor exposes no model_available hook",
+        )
 
     async def infer(
         self,
@@ -145,15 +231,21 @@ class ContractModelOperator:
         """
         self._check_schema(schema)
         started = time.perf_counter()
+        # Degrade to "unavailable", never raise — but say WHY (degrade_reason):
+        # a reasoning model silently eating its token budget must be
+        # distinguishable from an unreachable server.
         try:
             raw = await self._run(input, deadline_ms)
-        except Exception:  # noqa: BLE001 — degrade to "unavailable", never raise
-            return ModelResult(
-                status="unavailable",
-                model_id=self._model_id,
-                model_version=self._model_version,
-                latency_ms=self._elapsed_ms(started),
+        except (TimeoutError, asyncio.TimeoutError):
+            return self._unavailable(
+                started, "deadline_exceeded", f"deadline_ms={deadline_ms} elapsed"
             )
+        except ExtractorTransportError as exc:
+            return self._unavailable(started, "server_unreachable", str(exc))
+        except ExtractorOutputError as exc:
+            return self._unavailable(started, "output_unparseable", str(exc))
+        except Exception as exc:  # noqa: BLE001 — degrade, never raise
+            return self._unavailable(started, "error", f"{type(exc).__name__}: {exc}")
 
         grounded = ground_fields(raw, self._contract, input)
         return self._result(grounded, started)
@@ -236,6 +328,18 @@ class ContractModelOperator:
             )
         return self._owned_executor
 
+    def _unavailable(
+        self, started: float, reason: DegradeReason, detail: str
+    ) -> ModelResult[dict[str, str]]:
+        return ModelResult(
+            status="unavailable",
+            model_id=self._model_id,
+            model_version=self._model_version,
+            latency_ms=self._elapsed_ms(started),
+            degrade_reason=reason,
+            degrade_detail=detail,
+        )
+
     def _result(self, grounded: dict[str, str], started: float) -> ModelResult[dict[str, str]]:
         sentinel = self._contract.anchors_contract.missing_sentinel
         required = self._contract.field_names
@@ -256,4 +360,34 @@ class ContractModelOperator:
         return (time.perf_counter() - started) * 1000
 
 
-__all__ = ["ContractModelOperator"]
+def _wire_guidance(extractor: LocalExtractor, contract: GroundedContract) -> LocalExtractor:
+    """Compose ``closed_set`` steering onto a supplied extractor (``steering="auto"``).
+
+    A guidance-empty dataclass extractor with a ``field_guidance`` field gets
+    the contract's guidance injected via :func:`dataclasses.replace`;
+    caller-set guidance is never overwritten. An extractor that structurally
+    can't carry guidance triggers a loud ``UserWarning`` — the b19 silent
+    under-grounding trap, made visible. Contracts with no ``closed_set``
+    fields have nothing to wire and pass through untouched.
+    """
+    guidance = guidance_from_contract(contract)
+    if not guidance:
+        return extractor
+    if dataclasses.is_dataclass(extractor) and not isinstance(extractor, type):
+        field_names = {f.name for f in dataclasses.fields(extractor)}
+        if "field_guidance" in field_names:
+            if getattr(extractor, "field_guidance", None):
+                return extractor
+            return dataclasses.replace(extractor, field_guidance=guidance)
+    warnings.warn(
+        f"for_contract received a custom extractor ({type(extractor).__name__}) that "
+        "cannot carry field_guidance — the contract's closed_set steering is NOT wired, "
+        "so closed-set fields may never ground. Steer the extractor yourself "
+        "(guidance_from_contract) and pass steering='caller' to acknowledge.",
+        UserWarning,
+        stacklevel=3,
+    )
+    return extractor
+
+
+__all__ = ["ContractModelOperator", "Steering"]

@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from convilyn_edge.clientcompute.engine import BackendKind, HttpLocalExtractor
+from convilyn_edge.clientcompute.engine import BackendKind, HttpLocalExtractor, ModelAvailability
 from convilyn_edge.clientcompute.operator import EdgeModelOperator, ExtractInput
 from convilyn_edge.spi.model import ModelResult, Placement
 from convilyn_edge.warmup import WarmupResult
@@ -64,11 +64,29 @@ class OpenAICompatRunner:
         api_key: str | None = None,
         transport: Any = None,
         model_id: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        num_ctx: int | None = None,
+        reasoning: bool | None = None,
+        extra_body: Mapping[str, Any] | None = None,
     ) -> OpenAICompatRunner:
-        """Build a runner over an Ollama server (``/api/chat``)."""
+        """Build a runner over an Ollama server (``/api/chat``).
+
+        Generation kwargs left as ``None`` inherit the extractor defaults —
+        an unconfigured runner sends byte-identical request bodies.
+        """
         return cls(
             _http_extractor(
-                "ollama", model=model, base_url=base_url, api_key=api_key, transport=transport
+                "ollama",
+                model=model,
+                base_url=base_url,
+                api_key=api_key,
+                transport=transport,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                num_ctx=num_ctx,
+                reasoning=reasoning,
+                extra_body=extra_body,
             ),
             model_id=model_id,
         )
@@ -82,8 +100,17 @@ class OpenAICompatRunner:
         api_key: str | None = None,
         transport: Any = None,
         model_id: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        num_ctx: int | None = None,
+        reasoning: bool | None = None,
+        extra_body: Mapping[str, Any] | None = None,
     ) -> OpenAICompatRunner:
-        """Build a runner over any OpenAI-compatible server (``/chat/completions``)."""
+        """Build a runner over any OpenAI-compatible server (``/chat/completions``).
+
+        Generation kwargs left as ``None`` inherit the extractor defaults —
+        an unconfigured runner sends byte-identical request bodies.
+        """
         return cls(
             _http_extractor(
                 "openai-compat",
@@ -91,6 +118,11 @@ class OpenAICompatRunner:
                 base_url=base_url,
                 api_key=api_key,
                 transport=transport,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                num_ctx=num_ctx,
+                reasoning=reasoning,
+                extra_body=extra_body,
             ),
             model_id=model_id,
         )
@@ -118,6 +150,12 @@ class OpenAICompatRunner:
         """``None`` if the local inference server is reachable, else a problem string."""
         return self._extractor.health()
 
+    def model_available(self) -> ModelAvailability:
+        """Whether the bound model is actually servable on the server — the
+        binding check ``health()`` can't answer (see
+        :class:`~convilyn_edge.clientcompute.engine.ModelAvailability`)."""
+        return self._extractor.model_available()
+
     def warmup(self, deadline_ms: int | None = None) -> WarmupResult:
         """Pay the model's cold-start now; the three-state cold≠offline report.
 
@@ -136,17 +174,30 @@ def _http_extractor(
     base_url: str,
     api_key: str | None,
     transport: Any,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+    num_ctx: int | None = None,
+    reasoning: bool | None = None,
+    extra_body: Mapping[str, Any] | None = None,
 ) -> HttpLocalExtractor:
-    """Build an ``HttpLocalExtractor``, passing ``transport`` only when supplied so
-    the extractor keeps its stdlib default (tests inject a fake to avoid I/O)."""
+    """Build an ``HttpLocalExtractor``, passing each optional only when supplied so
+    the extractor keeps its own defaults (tests inject a fake ``transport`` to
+    avoid I/O; an all-``None`` call builds a byte-identical extractor)."""
     kwargs: dict[str, Any] = {
         "model": model,
         "kind": kind,
         "base_url": base_url,
         "api_key": api_key,
     }
-    if transport is not None:
-        kwargs["transport"] = transport
+    optionals: dict[str, Any] = {
+        "transport": transport,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "num_ctx": num_ctx,
+        "reasoning": reasoning,
+        "extra_body": extra_body,
+    }
+    kwargs.update({key: value for key, value in optionals.items() if value is not None})
     return HttpLocalExtractor(**kwargs)
 
 

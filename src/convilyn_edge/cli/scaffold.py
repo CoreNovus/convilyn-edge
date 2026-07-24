@@ -12,8 +12,9 @@ from pathlib import Path
 
 # A scaffold name is a single path component: alnum-led, then [A-Za-z0-9._-]. This
 # rejects path separators, ``..``, absolute/anchored names (which would escape the
-# target root — ``root / "adapters" / "/tmp/x"`` == ``/tmp/x``), and newlines / ``: ``
-# that would inject into the generated YAML.
+# target root — ``root / "adapters" / "/tmp/x"`` == ``/tmp/x``), and newlines /
+# quotes / ``: `` that would inject into the generated adapter YAML or the
+# workflow.py string literal.
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -51,25 +52,40 @@ canonical `EventEnvelope`. Implement `convilyn_edge.spi.EventSource` in `src/`.
 - `contract-tests/`  — assert the adapter emits the canonical envelope
 """
 
-_WORKFLOW_YAML = """\
-# Edge workflow '{name}' (a typed DAG, never an agent prompt).
-apiVersion: convilyn.io/v1alpha1
-kind: EdgeWorkflow
-metadata:
-  name: {name}
-  version: 0.1.0
-trigger:
-  event: device.example.received
-steps: []
+_WORKFLOW_PY = '''\
+"""Edge workflow '{name}' — a runtime ``Pipeline`` composition.
+
+A workflow's only executable form on the device is this Python composition of
+the SDK's runtime primitives, driven by ``WorkflowDriver`` — there is no
+standalone workflow manifest the runtime consumes. See the reference Solution
+Pack (``examples/pet_monitoring`` in the SDK source distribution) for a
+complete, working composition.
 """
+
+from convilyn_edge.runtime import Pipeline
+
+
+def build_pipeline() -> Pipeline:
+    """Compose the '{name}' workflow. Every builder call returns a NEW Pipeline."""
+    return (
+        Pipeline("{name}")
+        # .normalize(...)  # raw device payload -> canonical fields
+        # .state(...)      # durable aggregation (e.g. ThresholdAggregator)
+        # .decide(...)     # deterministic rule table
+        # .model(...)      # grounded model node (ContractModelOperator)
+        # .review(...)     # human review with an expires_at watchdog
+        # .act(...)        # ActionGate-authorized sinks
+    )
+'''
 
 _WORKFLOW_README = """\
 # {name} workflow
 
 Compose deterministic operators, a model operator, human review and gated
-actions over device events. Each step declares its input/output schema,
-placement, deadline and required permissions.
+actions over device events — fill in the `Pipeline` stages in `workflow.py`.
+Each stage declares its input binding, placement, deadline and authorization.
 
+- `workflow.py`    — the executable composition (`build_pipeline()`)
 - `schemas/`       — input/output schemas
 - `policies/`      — retry / timeout / human-review / fallback policy
 - `prompts/`       — model-operator prompt(s)
@@ -128,7 +144,7 @@ def scaffold_workflow(root: Path, name: str) -> Path:
         base,
         _WORKFLOW_DIRS,
         {
-            "workflow.yaml": _WORKFLOW_YAML.format(name=name),
+            "workflow.py": _WORKFLOW_PY.format(name=name),
             "README.md": _WORKFLOW_README.format(name=name),
         },
     )

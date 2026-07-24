@@ -37,8 +37,11 @@ from convilyn_edge.clientcompute.contract import (
     ground_anchors,
 )
 from convilyn_edge.clientcompute.engine import (
+    ExtractorOutputError,
+    ExtractorTransportError,
     HttpLocalExtractor,
     LocalExtractor,
+    ModelAvailability,
     build_extract_messages,
     resolve_local_model_tag,
 )
@@ -58,6 +61,9 @@ __all__ = [
     # engine
     "LocalExtractor",
     "HttpLocalExtractor",
+    "ExtractorTransportError",
+    "ExtractorOutputError",
+    "ModelAvailability",
     "resolve_local_model_tag",
     "build_extract_messages",
     # operator

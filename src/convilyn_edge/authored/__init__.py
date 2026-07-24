@@ -35,7 +35,7 @@ from convilyn_edge.authored.contract import (
     guidance_from_contract,
     load_contract,
 )
-from convilyn_edge.authored.operator import ContractModelOperator
+from convilyn_edge.authored.operator import ContractModelOperator, Steering
 
 __all__ = [
     "GroundingMode",
@@ -45,4 +45,5 @@ __all__ = [
     "guidance_from_contract",
     "load_contract",
     "ContractModelOperator",
+    "Steering",
 ]

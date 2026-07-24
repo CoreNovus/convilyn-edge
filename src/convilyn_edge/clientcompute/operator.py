@@ -27,8 +27,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from convilyn_edge.clientcompute.contract import AnchorsContract, ground_anchors
-from convilyn_edge.clientcompute.engine import LocalExtractor
-from convilyn_edge.spi.model import Evidence, ModelResult, Placement
+from convilyn_edge.clientcompute.engine import (
+    ExtractorOutputError,
+    ExtractorTransportError,
+    LocalExtractor,
+)
+from convilyn_edge.spi.model import DegradeReason, Evidence, ModelResult, Placement
 
 
 @dataclass(frozen=True)
@@ -73,18 +77,21 @@ class EdgeModelOperator:
         (the anchor key set is the effective schema here); this operator is
         edge-bound, so ``placement`` is informational."""
         started = time.perf_counter()
+        # Degrade to "unavailable", never raise — but say WHY (degrade_reason):
+        # an unreachable server, an elapsed deadline, and a model that ran but
+        # produced nothing parseable are operationally different failures.
         try:
             raw = await self._run(input, deadline_ms)
-        except Exception:  # noqa: BLE001 — degrade to "unavailable", never raise
-            return ModelResult(
-                status="unavailable",
-                model_id=self._model_id,
-                model_version=self._model_version,
-                latency_ms=self._elapsed_ms(started),
-                confidence=None,
-                evidence=(),
-                output=None,
+        except (TimeoutError, asyncio.TimeoutError):
+            return self._unavailable(
+                started, "deadline_exceeded", f"deadline_ms={deadline_ms} elapsed"
             )
+        except ExtractorTransportError as exc:
+            return self._unavailable(started, "server_unreachable", str(exc))
+        except ExtractorOutputError as exc:
+            return self._unavailable(started, "output_unparseable", str(exc))
+        except Exception as exc:  # noqa: BLE001 — degrade, never raise
+            return self._unavailable(started, "error", f"{type(exc).__name__}: {exc}")
 
         grounded = ground_anchors(raw, input.required_anchors, input.sources, input.contract)
         return self._result(grounded, input, started)
@@ -140,6 +147,18 @@ class EdgeModelOperator:
                 max_workers=1, thread_name_prefix=f"edge-model-{self._model_id}"
             )
         return self._owned_executor
+
+    def _unavailable(
+        self, started: float, reason: DegradeReason, detail: str
+    ) -> ModelResult[dict[str, str]]:
+        return ModelResult(
+            status="unavailable",
+            model_id=self._model_id,
+            model_version=self._model_version,
+            latency_ms=self._elapsed_ms(started),
+            degrade_reason=reason,
+            degrade_detail=detail,
+        )
 
     def _result(
         self, grounded: dict[str, str], input: ExtractInput, started: float

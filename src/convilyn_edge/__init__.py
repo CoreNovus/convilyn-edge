@@ -83,6 +83,7 @@ from convilyn_edge.spi import (
     ActionStatus,
     DecisionSource,
     DefaultAction,
+    DegradeReason,
     DeterministicOperator,
     DeviceHealth,
     EventContext,
@@ -186,6 +187,7 @@ __all__ = [
     "Evidence",
     "Placement",
     "ModelStatus",
+    "DegradeReason",
     # SPI — 6. HumanReview
     "HumanReview",
     "ReviewRequest",

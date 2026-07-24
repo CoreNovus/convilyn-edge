@@ -9,6 +9,8 @@ from typing import Any
 import pytest
 
 from convilyn_edge.clientcompute.engine import (
+    ExtractorOutputError,
+    ExtractorTransportError,
     HttpLocalExtractor,
     build_extract_messages,
     resolve_local_model_tag,
@@ -128,6 +130,283 @@ def test_extract_tolerates_json_fence():
     result = extractor.extract(prompt="p", sources={"f": "t"}, required_anchors=["title"])
 
     assert result == {"title": "X"}
+
+
+# ── generation params: b21 defaults stay byte-identical to the b20 wire ──────
+
+
+def test_openai_compat_default_body_is_byte_identical_to_b20():
+    transport = _FakeTransport('{"title": "X"}', kind="openai-compat")
+    extractor = HttpLocalExtractor(model="m", kind="openai-compat", transport=transport)
+
+    extractor.extract(prompt="p", sources={"f": "t"}, required_anchors=["title"])
+
+    assert transport.last_body == {
+        "model": "m",
+        "messages": build_extract_messages("p", {"f": "t"}, ["title"]),
+        "temperature": 0.0,
+        "max_tokens": 1024,
+        "response_format": {"type": "json_object"},
+    }
+
+
+def test_ollama_default_body_is_byte_identical_to_b20():
+    transport = _FakeTransport('{"title": "X"}', kind="ollama")
+    extractor = HttpLocalExtractor(model="m", kind="ollama", transport=transport)
+
+    extractor.extract(prompt="p", sources={"f": "t"}, required_anchors=["title"])
+
+    assert transport.last_body == {
+        "model": "m",
+        "messages": build_extract_messages("p", {"f": "t"}, ["title"]),
+        "stream": False,
+        "think": False,
+        "format": "json",
+        "options": {"temperature": 0.0, "num_ctx": 8192, "num_predict": 1024},
+    }
+
+
+def test_openai_compat_gen_params_land_in_body():
+    transport = _FakeTransport('{"a": "x"}', kind="openai-compat")
+    extractor = HttpLocalExtractor(
+        model="m", kind="openai-compat", transport=transport, max_tokens=4096, temperature=0.7
+    )
+
+    extractor.extract(prompt="p", sources={"f": "t"}, required_anchors=["a"])
+
+    assert (transport.last_body["max_tokens"], transport.last_body["temperature"]) == (4096, 0.7)
+
+
+def test_ollama_gen_params_land_in_options():
+    transport = _FakeTransport('{"a": "x"}', kind="ollama")
+    extractor = HttpLocalExtractor(
+        model="m",
+        kind="ollama",
+        transport=transport,
+        max_tokens=4096,
+        temperature=0.7,
+        num_ctx=4096,
+    )
+
+    extractor.extract(prompt="p", sources={"f": "t"}, required_anchors=["a"])
+
+    assert transport.last_body["options"] == {
+        "temperature": 0.7,
+        "num_ctx": 4096,
+        "num_predict": 4096,
+    }
+
+
+@pytest.mark.parametrize(
+    "reasoning, expected_think", [(None, False), (False, False), (True, True)]
+)
+def test_ollama_reasoning_tristate_maps_to_think(reasoning, expected_think):
+    transport = _FakeTransport('{"a": "x"}', kind="ollama")
+    extractor = HttpLocalExtractor(
+        model="m", kind="ollama", transport=transport, reasoning=reasoning
+    )
+
+    extractor.extract(prompt="p", sources={"f": "t"}, required_anchors=["a"])
+
+    assert transport.last_body["think"] is expected_think
+
+
+@pytest.mark.parametrize(
+    "reasoning, expected_kwargs",
+    [(None, None), (False, {"enable_thinking": False}), (True, None)],
+)
+def test_openai_compat_reasoning_tristate_maps_to_chat_template_kwargs(reasoning, expected_kwargs):
+    transport = _FakeTransport('{"a": "x"}', kind="openai-compat")
+    extractor = HttpLocalExtractor(
+        model="m", kind="openai-compat", transport=transport, reasoning=reasoning
+    )
+
+    extractor.extract(prompt="p", sources={"f": "t"}, required_anchors=["a"])
+
+    assert transport.last_body.get("chat_template_kwargs") == expected_kwargs
+
+
+def test_extra_body_scalar_key_is_added():
+    transport = _FakeTransport('{"a": "x"}', kind="openai-compat")
+    extractor = HttpLocalExtractor(
+        model="m", kind="openai-compat", transport=transport, extra_body={"reasoning_effort": "low"}
+    )
+
+    extractor.extract(prompt="p", sources={"f": "t"}, required_anchors=["a"])
+
+    assert transport.last_body["reasoning_effort"] == "low"
+
+
+def test_extra_body_dict_value_merges_over_built_options():
+    transport = _FakeTransport('{"a": "x"}', kind="ollama")
+    extractor = HttpLocalExtractor(
+        model="m", kind="ollama", transport=transport, extra_body={"options": {"top_k": 1}}
+    )
+
+    extractor.extract(prompt="p", sources={"f": "t"}, required_anchors=["a"])
+
+    assert transport.last_body["options"] == {
+        "temperature": 0.0,
+        "num_ctx": 8192,
+        "num_predict": 1024,
+        "top_k": 1,
+    }
+
+
+def test_extra_body_scalar_replaces_built_key():
+    transport = _FakeTransport('{"a": "x"}', kind="openai-compat")
+    extractor = HttpLocalExtractor(
+        model="m", kind="openai-compat", transport=transport, extra_body={"max_tokens": 8}
+    )
+
+    extractor.extract(prompt="p", sources={"f": "t"}, required_anchors=["a"])
+
+    assert transport.last_body["max_tokens"] == 8
+
+
+# ── typed failures: transport vs model-output ────────────────────────────────
+
+
+class _RawTransport:
+    """Returns a caller-provided full response dict (any message shape)."""
+
+    def __init__(self, response: dict[str, Any]) -> None:
+        self.response = response
+
+    def __call__(self, url, body, headers, timeout) -> dict[str, Any]:
+        return self.response
+
+
+def test_transport_failure_raises_extractor_transport_error():
+    def boom(url, body, headers, timeout):
+        raise OSError("connection refused")
+
+    extractor = HttpLocalExtractor(model="m", kind="ollama", transport=boom)
+
+    with pytest.raises(ExtractorTransportError, match="connection refused"):
+        extractor.extract(prompt="p", sources={"f": "t"}, required_anchors=["a"])
+
+
+def test_garbage_output_raises_extractor_output_error():
+    transport = _FakeTransport("the model rambled instead of emitting JSON", kind="ollama")
+    extractor = HttpLocalExtractor(model="m", kind="ollama", transport=transport)
+
+    with pytest.raises(ExtractorOutputError, match="not parseable"):
+        extractor.extract(prompt="p", sources={"f": "t"}, required_anchors=["a"])
+
+
+def test_empty_content_raises_extractor_output_error():
+    transport = _RawTransport({"message": {"content": ""}})
+    extractor = HttpLocalExtractor(model="m", kind="ollama", transport=transport)
+
+    with pytest.raises(ExtractorOutputError, match="not parseable"):
+        extractor.extract(prompt="p", sources={"f": "t"}, required_anchors=["a"])
+
+
+@pytest.mark.parametrize(
+    "kind, message",
+    [
+        ("openai-compat", {"content": "", "reasoning_content": "step 1: think..."}),
+        ("openai-compat", {"content": None, "reasoning": "step 1: think..."}),
+        ("ollama", {"content": "", "thinking": "step 1: think..."}),
+    ],
+)
+def test_reasoning_only_response_raises_extractor_output_error(kind, message):
+    response = (
+        {"choices": [{"message": message}]} if kind == "openai-compat" else {"message": message}
+    )
+    extractor = HttpLocalExtractor(model="m", kind=kind, transport=_RawTransport(response))
+
+    with pytest.raises(ExtractorOutputError, match="reasoning-only"):
+        extractor.extract(prompt="p", sources={"f": "t"}, required_anchors=["a"])
+
+
+# ── model_available: the binding check health() can't answer ─────────────────
+
+
+def _get_transport(body):
+    def transport(url, headers, timeout):
+        return body
+
+    return transport
+
+
+def test_model_available_ollama_finds_exact_tag():
+    extractor = HttpLocalExtractor(
+        model="qwen3:4b",
+        kind="ollama",
+        get_transport=_get_transport({"models": [{"name": "qwen3:4b"}, {"name": "llava:7b"}]}),
+    )
+
+    assert extractor.model_available().state == "available"
+
+
+def test_model_available_ollama_matches_latest_suffix_for_bare_tag():
+    extractor = HttpLocalExtractor(
+        model="qwen3",
+        kind="ollama",
+        get_transport=_get_transport({"models": [{"name": "qwen3:latest"}]}),
+    )
+
+    assert extractor.model_available().state == "available"
+
+
+def test_model_available_reports_missing_with_known_models():
+    extractor = HttpLocalExtractor(
+        model="qwen3:4b",
+        kind="ollama",
+        get_transport=_get_transport({"models": [{"name": "llava:7b"}]}),
+    )
+
+    report = extractor.model_available()
+    assert (report.state, report.known_models) == ("missing", ("llava:7b",))
+
+
+def test_model_available_openai_compat_matches_data_id():
+    extractor = HttpLocalExtractor(
+        model="qwen3-4b",
+        kind="openai-compat",
+        get_transport=_get_transport({"data": [{"id": "qwen3-4b"}]}),
+    )
+
+    assert extractor.model_available().state == "available"
+
+
+def test_model_available_empty_listing_is_unknown_never_missing():
+    # Single-model openai-compat servers (llama.cpp/LM Studio) may report an
+    # empty or arbitrary listing — that must never read as a false "missing".
+    extractor = HttpLocalExtractor(
+        model="qwen3-4b", kind="openai-compat", get_transport=_get_transport({"data": []})
+    )
+
+    assert extractor.model_available().state == "unknown"
+
+
+def test_model_available_odd_listing_shape_is_unknown():
+    extractor = HttpLocalExtractor(
+        model="qwen3:4b", kind="ollama", get_transport=_get_transport(["not", "a", "dict"])
+    )
+
+    assert extractor.model_available().state == "unknown"
+
+
+def test_model_available_transport_failure_is_unreachable():
+    def boom(url, headers, timeout):
+        raise OSError("refused")
+
+    extractor = HttpLocalExtractor(model="qwen3:4b", kind="ollama", get_transport=boom)
+
+    assert extractor.model_available().state == "unreachable"
+
+
+def test_model_available_truthiness_means_available():
+    extractor = HttpLocalExtractor(
+        model="qwen3:4b",
+        kind="ollama",
+        get_transport=_get_transport({"models": [{"name": "qwen3:4b"}]}),
+    )
+
+    assert bool(extractor.model_available()) is True
 
 
 # ── from_env backend selection ───────────────────────────────────────────────

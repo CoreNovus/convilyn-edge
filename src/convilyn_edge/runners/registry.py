@@ -52,6 +52,11 @@ class RunnerConfig:
     ``min_ram_mb`` declares the model's minimum device RAM (MiB) — a declarative
     fit field compared generically against the probed device, never a per-device
     branch. ``None`` (the default) skips the fit check entirely.
+
+    ``max_tokens`` / ``temperature`` / ``num_ctx`` / ``reasoning`` /
+    ``extra_body`` tune generation on the HTTP-local runners; ``None`` (the
+    default) inherits each :class:`~convilyn_edge.clientcompute.engine.HttpLocalExtractor`
+    default, keeping the built runner byte-identical to an unconfigured one.
     """
 
     model: str
@@ -59,6 +64,11 @@ class RunnerConfig:
     api_key: str | None = None
     transport: Any = None
     min_ram_mb: int | None = None
+    max_tokens: int | None = None
+    temperature: float | None = None
+    num_ctx: int | None = None
+    reasoning: bool | None = None
+    extra_body: Any = None
 
 
 @dataclass(frozen=True)
@@ -116,12 +126,28 @@ def check_ram_fit(
     )
 
 
+def _generation_kwargs(config: RunnerConfig) -> dict[str, Any]:
+    """The generation fields a config actually sets (``None`` = inherit default)."""
+    return {
+        key: value
+        for key, value in {
+            "max_tokens": config.max_tokens,
+            "temperature": config.temperature,
+            "num_ctx": config.num_ctx,
+            "reasoning": config.reasoning,
+            "extra_body": config.extra_body,
+        }.items()
+        if value is not None
+    }
+
+
 def _openai_compat_builder(config: RunnerConfig) -> Runner:
     return OpenAICompatRunner.openai_compat(
         model=config.model,
         base_url=config.base_url or "http://localhost:8080/v1",
         api_key=config.api_key,
         transport=config.transport,
+        **_generation_kwargs(config),
     )
 
 
@@ -131,6 +157,7 @@ def _ollama_builder(config: RunnerConfig) -> Runner:
         base_url=config.base_url or "http://localhost:11434",
         api_key=config.api_key,
         transport=config.transport,
+        **_generation_kwargs(config),
     )
 
 

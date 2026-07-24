@@ -25,6 +25,7 @@ from convilyn_edge.spi.action import (
     RiskLevel,
 )
 from convilyn_edge.spi.model import (
+    DegradeReason,
     Evidence,
     ModelOperator,
     ModelResult,
@@ -76,6 +77,7 @@ __all__ = [
     "Evidence",
     "Placement",
     "ModelStatus",
+    "DegradeReason",
     # 6. HumanReview
     "HumanReview",
     "ReviewRequest",

@@ -4,6 +4,55 @@ All notable changes to `convilyn-edge` are documented here. The SDK's public
 surface follows Semantic Versioning; pre-1.0 minor/patch may still adjust
 surface under the alpha label.
 
+## 0.1.0b21 — 2026-07-25
+
+The b20 integrator-feedback round: reasoning-model honesty, operator
+forwarding, steering composition, and the binding-availability check.
+
+### Added
+
+- Generation params on `HttpLocalExtractor` / `RunnerConfig` /
+  `OpenAICompatRunner.ollama|openai_compat` / `for_contract`: `max_tokens`,
+  `temperature`, `num_ctx` (ollama), `reasoning` (tri-state), `extra_body`
+  (vendor passthrough, one-level-deep merge applied last). Defaults are
+  byte-identical to the b20 wire (golden-pinned). `reasoning=False` on the
+  OpenAI-compat path sends `chat_template_kwargs: {"enable_thinking": false}`
+  (the Qwen3 / vLLM / SGLang convention).
+- `ModelResult.degrade_reason` (`server_unreachable | deadline_exceeded |
+  output_unparseable | error`) + `degrade_detail` — additive; populated only
+  for `status="unavailable"`. Typed extractor failures
+  (`ExtractorTransportError` / `ExtractorOutputError`), with reasoning-only
+  responses (reasoning populated, content empty) detected as output errors —
+  a reasoning model silently eating its token budget is no longer
+  indistinguishable from an offline server.
+- `ContractModelOperator.warmup(deadline_ms=None)` / `.health()` /
+  `.model_available()` forwarding — the manufactured-contract path reaches the
+  warm-up hook without a second hand-built extractor.
+- `HttpLocalExtractor.model_available()` → `ModelAvailability`
+  (`available | missing | unreachable | unknown`): the binding check
+  `health()` can't answer (Ollama `/api/tags` membership incl. `:latest`
+  nuance; OpenAI-compat `/models` ids; empty/odd listing is `unknown`, never a
+  false `missing`). Also on `OpenAICompatRunner`.
+- `cli/__main__.py` — `python -m convilyn_edge.cli` works on vendored/no-pip
+  installs.
+- README: canonical `from_env` environment-variable table, generation-params +
+  `degrade_reason` guidance, and a pointer that `examples/` travel in the
+  sdist/mirror, not the wheel.
+
+### Changed
+
+- `for_contract(extractor=..., steering="auto"|"caller")` — a supplied
+  extractor now composes with `closed_set` steering instead of silently
+  dropping it: a guidance-empty dataclass extractor gets
+  `guidance_from_contract` injected; one that can't carry guidance triggers a
+  loud `UserWarning`; `steering="caller"` restores the b20 as-is behavior
+  explicitly. (The one deliberate behavior change of this release — it closes
+  the silent under-grounding trap on the escape hatch.)
+- `convilyn-edge init workflow` scaffolds a `workflow.py` `Pipeline`
+  composition skeleton instead of a `workflow.yaml` manifest that nothing consumed —
+  the workflow's executable form is the Python composition; the declarative
+  DAG artifact is platform-side.
+
 ## 0.1.0b20 — 2026-07-24
 
 The integrator-feedback DX round: warm-up, fit-guard, the manufactured-contract

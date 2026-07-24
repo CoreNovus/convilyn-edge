@@ -103,6 +103,76 @@ async def test_transport_error_yields_unavailable():
     assert result.status == "unavailable"
 
 
+async def test_transport_error_reports_server_unreachable():
+    def boom(url, body, headers, timeout):
+        raise ConnectionError("server down")
+
+    runner = OpenAICompatRunner.openai_compat(model="m", base_url="http://sim/v1", transport=boom)
+
+    result = await runner.infer(_extract_input(), schema={})
+
+    assert result.degrade_reason == "server_unreachable"
+
+
+async def test_garbage_model_output_reports_output_unparseable():
+    runner = OpenAICompatRunner.openai_compat(
+        model="m", base_url="http://sim/v1", transport=_openai_transport("rambling, not JSON")
+    )
+
+    result = await runner.infer(_extract_input(), schema={})
+
+    assert result.degrade_reason == "output_unparseable"
+
+
+def test_model_available_delegates_to_the_extractor():
+    from convilyn_edge.clientcompute.engine import HttpLocalExtractor
+
+    extractor = HttpLocalExtractor(
+        model="qwen3:4b",
+        kind="ollama",
+        get_transport=lambda url, headers, timeout: {"models": [{"name": "qwen3:4b"}]},
+    )
+    runner = OpenAICompatRunner(extractor)
+
+    assert runner.model_available().state == "available"
+
+
+# ── generation params thread through construction ────────────────────────────
+
+
+def test_gen_params_reach_the_extractor():
+    runner = OpenAICompatRunner.ollama(
+        model="m",
+        max_tokens=64,
+        temperature=0.2,
+        num_ctx=2048,
+        reasoning=True,
+        extra_body={"options": {"top_k": 1}},
+    )
+
+    extractor = runner._extractor
+    assert (
+        extractor.max_tokens,
+        extractor.temperature,
+        extractor.num_ctx,
+        extractor.reasoning,
+        extractor.extra_body,
+    ) == (64, 0.2, 2048, True, {"options": {"top_k": 1}})
+
+
+def test_unset_gen_params_keep_extractor_defaults():
+    runner = OpenAICompatRunner.ollama(model="m")
+
+    extractor = runner._extractor
+    assert (
+        extractor.max_tokens,
+        extractor.temperature,
+        extractor.num_ctx,
+        extractor.reasoning,
+        extractor.extra_body,
+    ) == (1024, 0.0, 8192, None, None)
+
+
 # ── object-state: from_env selects the backend by config ─────────────────────
 
 

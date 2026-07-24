@@ -7,7 +7,7 @@ for building auditable, offline-capable edge/IoT AI workflows.
 > welcome and land in the shipped package — see
 > **[CONTRIBUTING.md](CONTRIBUTING.md)** (fork → PR → upstreamed, authorship preserved).
 
-> **Alpha (`0.1.0b3`).** v0.1 ships the seven typed SPI Protocols + the Event
+> **Alpha (`0.1.0b` series).** v0.1 ships the seven typed SPI Protocols + the Event
 > Envelope + a `Result` type — with **zero runtime dependencies** — plus, landed
 > across the 0.1 beta series: the `client_compute` on-device model keystone
 > (`convilyn_edge.clientcompute`), the durable offline queue + emitter
@@ -141,7 +141,46 @@ from the environment (`EDGE_LLM_URL` → OpenAI-compatible, else Ollama), resolv
 the local model tag from the contract's `model_binding`, and wires the
 `closed_set` steering below — all overridable (`extractor=`, `model=`, `env=`).
 The multi-step assembly (`load_contract` + your own runner) remains for full
-control.
+control. A supplied `extractor=` still composes with steering: a guidance-empty
+`HttpLocalExtractor` gets the contract's guidance injected automatically, an
+extractor that can't carry guidance triggers a loud `UserWarning`, and
+`steering="caller"` declares steering caller-managed (silent, as-is).
+
+### Environment contract (`from_env`)
+
+These are the canonical variables the reference extractor reads — packs should
+map their own configuration onto these names rather than invent parallel ones:
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `EDGE_LLM_URL` | OpenAI-compatible base URL; **setting it selects the `openai-compat` backend** | unset (→ Ollama) |
+| `EDGE_LLM_API_KEY` | Bearer token for the OpenAI-compatible server | unset |
+| `EDGE_LLM_MODEL` | Model tag (overridden by an explicit `model=` / contract binding) | `qwen3:4b` |
+| `OLLAMA_BASE` | Ollama base URL when `EDGE_LLM_URL` is unset | `http://localhost:11434` |
+
+### Generation params & honest degradation (reasoning models)
+
+Reasoning models can silently spend their whole token budget thinking —
+producing an empty answer that a naive integration reads as "server down".
+Both are first-class now:
+
+```python
+operator = ContractModelOperator.for_contract(
+    "installed/pet_cat_locate.uw.json",
+    max_tokens=4096,        # openai-compat max_tokens / ollama num_predict
+    reasoning=False,        # ollama think:false; openai-compat chat_template_kwargs
+    extra_body={"reasoning_effort": "low"},  # vendor passthrough, merged last
+)
+
+result = await operator.infer({"scene": scene_text}, schema={})
+if result.status == "unavailable":
+    result.degrade_reason   # "server_unreachable" | "deadline_exceeded"
+                            # | "output_unparseable" | "error"
+```
+
+`degrade_reason` is the difference between *"the server is offline"* and *"the
+model ran and produced nothing parseable"* — assert on it in your load-bearing
+test tier (below) so a green fallback can't hide a dead model.
 
 ### The two per-field weapons: `closed_set` and `field_guidance`
 
@@ -217,7 +256,8 @@ scenario through the built-in simulator:
 ```bash
 convilyn-edge simulate scenario.json --no-delay    # prints one wire-JSON envelope per event
 convilyn-edge init adapter my-sensor               # scaffold a device adapter
-convilyn-edge init workflow my-workflow            # scaffold a workflow
+convilyn-edge init workflow my-workflow            # scaffold a workflow (workflow.py Pipeline skeleton)
+python -m convilyn_edge.cli --help                 # same CLI on vendored/no-pip installs
 ```
 
 A scenario declares a device and an ordered list of events (each with an optional
@@ -268,7 +308,21 @@ elif report.state == "cold_started":
 first), and a probe that exceeds its deadline while the server stays up reports
 `cold_started` — the model is loading, not offline. Runners without a warmup
 hook are handled generically: `warmup_runner(runner)` returns already-`warm`
-for them, so the call is always safe.
+for them, so the call is always safe. `ContractModelOperator` forwards both
+hooks (`operator.warmup(...)` / `operator.health()`) — no second extractor
+needed just to warm the manufactured-contract path.
+
+One more doctor check: `health()` proves the *server* is up, not that it can
+serve *your* model. `model_available()` answers the binding question:
+
+```python
+report = operator.model_available()   # also on HttpLocalExtractor / OpenAICompatRunner
+report.state   # "available" | "missing" | "unreachable" | "unknown"
+```
+
+`missing` means the server listed its models and the bound tag isn't there
+(keep your banner honest); an empty or unrecognizable listing is `unknown`,
+never a false `missing`. Doctor-surface data — never gate execution on it.
 
 ## Design principles (enforced in code, not just docs)
 
@@ -295,7 +349,10 @@ uv add --prerelease=allow convilyn-edge   # or: pip install --pre convilyn-edge
 ```
 
 Python ≥ 3.10. Zero runtime dependencies. Runnable examples live in
-[`examples/`](./examples/) — start with `examples/drive_pipeline.py`.
+[`examples/`](./examples/) — start with `examples/drive_pipeline.py`. The
+examples (including the `pet_monitoring` reference Solution Pack) travel in the
+**source distribution and the public mirror, not the wheel** — grab them with
+`pip download --no-binary :all: convilyn-edge` or from the repository.
 
 ## License
 

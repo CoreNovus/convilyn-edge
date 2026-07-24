@@ -57,6 +57,23 @@ def test_generic_host_resolves_to_openai_compat_runner():
     assert isinstance(runner, OpenAICompatRunner)
 
 
+# ── generation params thread from config through to the built runner ─────────
+
+
+def test_config_gen_params_thread_through_to_the_runner():
+    config = RunnerConfig(model="m", max_tokens=64, reasoning=False)
+
+    runner = select_runner("ollama", config)
+
+    assert (runner._extractor.max_tokens, runner._extractor.reasoning) == (64, False)
+
+
+def test_config_without_gen_params_builds_default_extractor():
+    runner = select_runner("ollama", RunnerConfig(model="m"))
+
+    assert (runner._extractor.max_tokens, runner._extractor.reasoning) == (1024, None)
+
+
 # ── error: an unknown runtime fails loud (no silent fallback) ─────────────────
 
 

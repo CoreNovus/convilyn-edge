@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from convilyn_edge.clientcompute.contract import AnchorsContract
+from convilyn_edge.clientcompute.engine import ExtractorOutputError, ExtractorTransportError
 from convilyn_edge.clientcompute.operator import EdgeModelOperator, ExtractInput
 
 _SOURCES = {"f": "The role is Staff Engineer at Acme."}
@@ -109,6 +110,46 @@ async def test_deadline_exceeded_is_unavailable():
     result = await op.infer(_input(), schema=_SCHEMA, deadline_ms=1)
 
     assert result.status == "unavailable"
+
+
+async def test_deadline_exceeded_reports_deadline_degrade_reason():
+    op = EdgeModelOperator(_FakeExtractor({"title": "Staff Engineer"}, sleep=0.2))
+
+    result = await op.infer(_input(), schema=_SCHEMA, deadline_ms=1)
+
+    assert result.degrade_reason == "deadline_exceeded"
+
+
+async def test_transport_failure_reports_server_unreachable():
+    op = EdgeModelOperator(_FakeExtractor(raises=ExtractorTransportError("connection refused")))
+
+    result = await op.infer(_input(), schema=_SCHEMA)
+
+    assert result.degrade_reason == "server_unreachable"
+
+
+async def test_unparseable_output_reports_output_unparseable():
+    op = EdgeModelOperator(_FakeExtractor(raises=ExtractorOutputError("reasoning-only response")))
+
+    result = await op.infer(_input(), schema=_SCHEMA)
+
+    assert result.degrade_reason == "output_unparseable"
+
+
+async def test_arbitrary_extractor_error_reports_error_reason():
+    op = EdgeModelOperator(_FakeExtractor(raises=RuntimeError("model down")))
+
+    result = await op.infer(_input(), schema=_SCHEMA)
+
+    assert result.degrade_reason == "error"
+
+
+async def test_success_carries_no_degrade_reason():
+    op = EdgeModelOperator(_FakeExtractor({"title": "Staff Engineer"}))
+
+    result = await op.infer(_input(), schema=_SCHEMA)
+
+    assert result.degrade_reason is None
 
 
 async def test_custom_sentinel_is_not_counted_as_grounded():

@@ -9,6 +9,7 @@ import pytest
 
 from convilyn_edge.authored.contract import GroundedContract, GroundedField
 from convilyn_edge.authored.operator import ContractModelOperator
+from convilyn_edge.clientcompute.engine import ExtractorOutputError, ExtractorTransportError
 
 _SOURCES = {"scene": "Doudou is sleeping on the sofa near the window."}
 
@@ -137,6 +138,115 @@ async def test_deadline_exceeded_is_unavailable():
     result = await op.infer(_SOURCES, schema={}, deadline_ms=1)
 
     assert result.status == "unavailable"
+
+
+# ── error: degrade_reason discriminates WHY the result is unavailable ────────
+
+
+async def test_deadline_exceeded_reports_deadline_degrade_reason():
+    op = ContractModelOperator(_FakeExtractor({"present": "true"}, sleep=0.2), _contract())
+
+    result = await op.infer(_SOURCES, schema={}, deadline_ms=1)
+
+    assert result.degrade_reason == "deadline_exceeded"
+
+
+async def test_transport_failure_reports_server_unreachable():
+    failing = _FakeExtractor(raises=ExtractorTransportError("connection refused"))
+    op = ContractModelOperator(failing, _contract())
+
+    result = await op.infer(_SOURCES, schema={})
+
+    assert result.degrade_reason == "server_unreachable"
+
+
+async def test_unparseable_output_reports_output_unparseable():
+    failing = _FakeExtractor(raises=ExtractorOutputError("reasoning-only response"))
+    op = ContractModelOperator(failing, _contract())
+
+    result = await op.infer(_SOURCES, schema={})
+
+    assert result.degrade_reason == "output_unparseable"
+
+
+async def test_arbitrary_runner_error_reports_error_reason():
+    op = ContractModelOperator(_FakeExtractor(raises=RuntimeError("model down")), _contract())
+
+    result = await op.infer(_SOURCES, schema={})
+
+    assert result.degrade_reason == "error"
+
+
+async def test_degrade_detail_carries_the_cause_message():
+    failing = _FakeExtractor(raises=ExtractorOutputError("reasoning-only response"))
+    op = ContractModelOperator(failing, _contract())
+
+    result = await op.infer(_SOURCES, schema={})
+
+    assert "reasoning-only" in (result.degrade_detail or "")
+
+
+async def test_success_carries_no_degrade_reason():
+    op = ContractModelOperator(_FakeExtractor({"present": "true", "zone": "sofa"}), _contract())
+
+    result = await op.infer(_SOURCES, schema={})
+
+    assert result.degrade_reason is None
+
+
+# ── forwarding: warmup / health / model_available reach the held extractor ───
+
+
+def test_warmup_delegates_to_extractor_hook():
+    from convilyn_edge.warmup import WarmupResult
+
+    class _WarmableExtractor(_FakeExtractor):
+        def warmup(self, deadline_ms=None):
+            return WarmupResult(state="cold_started", latency_ms=9800.0)
+
+    op = ContractModelOperator(_WarmableExtractor({"present": "true"}), _contract())
+
+    assert op.warmup(deadline_ms=30_000).state == "cold_started"
+
+
+def test_warmup_without_hook_reports_already_warm():
+    op = ContractModelOperator(_FakeExtractor({"present": "true"}), _contract())
+
+    assert op.warmup().state == "warm"
+
+
+def test_health_delegates_to_extractor_hook():
+    class _UnhealthyExtractor(_FakeExtractor):
+        def health(self):
+            return "server unreachable at http://localhost:11434"
+
+    op = ContractModelOperator(_UnhealthyExtractor({"present": "true"}), _contract())
+
+    assert "unreachable" in op.health()
+
+
+def test_health_without_hook_reports_no_problem():
+    op = ContractModelOperator(_FakeExtractor({"present": "true"}), _contract())
+
+    assert op.health() is None
+
+
+def test_model_available_delegates_to_extractor_hook():
+    from convilyn_edge.clientcompute.engine import ModelAvailability
+
+    class _ListingExtractor(_FakeExtractor):
+        def model_available(self):
+            return ModelAvailability(state="missing", model="qwen3:4b")
+
+    op = ContractModelOperator(_ListingExtractor({"present": "true"}), _contract())
+
+    assert op.model_available().state == "missing"
+
+
+def test_model_available_without_hook_is_unknown_never_available():
+    op = ContractModelOperator(_FakeExtractor({"present": "true"}), _contract())
+
+    assert op.model_available().state == "unknown"
 
 
 # ── object-state: executor lifecycle ─────────────────────────────────────────

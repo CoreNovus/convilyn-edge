@@ -93,7 +93,7 @@ class QnnOnnxRunner:
             if not self.available():
                 raise QnnUnavailableError("QNN Execution Provider not present on this host")
             return await self._execute(input, schema=schema, deadline_ms=deadline_ms)
-        except Exception:  # noqa: BLE001 — fail loud AS unavailable; never propagate
+        except Exception as exc:  # noqa: BLE001 — fail loud AS unavailable; never propagate
             return ModelResult(
                 status="unavailable",
                 model_id=self._model_id,
@@ -102,6 +102,8 @@ class QnnOnnxRunner:
                 output=None,
                 confidence=None,
                 evidence=(),
+                degrade_reason="error",
+                degrade_detail=f"{type(exc).__name__}: {exc}",
             )
 
     async def _execute(
