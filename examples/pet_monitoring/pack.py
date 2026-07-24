@@ -35,10 +35,11 @@ from typing import Any
 
 from convilyn_edge.envelope import EventEnvelope
 from convilyn_edge.runtime import OccurrenceKey, Pipeline, PipelineState, ThresholdAggregator
+from convilyn_edge.spi.model import ModelOperator
 from convilyn_edge.spi.operator import ExecutionContext
 from convilyn_edge.spi.review import HumanReview, ReviewChoice, ReviewRequest
 from convilyn_edge.spi.state import EventContext
-from examples.pet_monitoring.model_node import CameraFrame, CatLocation, CatLocatorModel
+from examples.pet_monitoring.model_node import CameraFrame, CatLocation
 from examples.pet_monitoring.operators import PetAnomalyRules
 from examples.pet_monitoring.sinks import NotifyRequest, NotifySink
 
@@ -195,7 +196,7 @@ def assemble_pet_alert_pipeline(
     *,
     aggregator: ThresholdAggregator,
     connectivity: ConnectivityProvider,
-    cat_locator: CatLocatorModel,
+    cat_locator: ModelOperator[CameraFrame, CatLocation],
     review: HumanReview,
     notify_primary: NotifySink,
     notify_escalation: NotifySink,

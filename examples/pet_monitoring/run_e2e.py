@@ -26,27 +26,32 @@ import os
 import re
 import sys
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from convilyn_edge.clientcompute.engine import HttpLocalExtractor
+from convilyn_edge.authored import guidance_from_contract, load_contract
+from convilyn_edge.clientcompute.engine import HttpLocalExtractor, LocalExtractor
 from convilyn_edge.offline.queue import DurableQueue
 from convilyn_edge.probe import DeviceCapabilityManifest, InstalledAsset
 from convilyn_edge.runtime import ThresholdAggregator
+from convilyn_edge.spi.model import Placement
 from convilyn_edge.spi.review import ReviewOutcome, ReviewRequest
 from convilyn_edge.spi.source import EventSource, SourceContext
 from examples.pet_monitoring import (
+    PET_CONTRACT_PATH,
     CameraFrame,
     CatLocation,
     CatLocatorModel,
     ConnectivityProvider,
+    ContractCatLocator,
     FeederSimSource,
     LitterSimSource,
     NotifySink,
     PetAnomalyRules,
+    ScriptedContractExtractor,
     WaterSimSource,
     anomaly_bucket,
     assemble_pet_alert_pipeline,
@@ -149,17 +154,19 @@ def _stub_detector(frame: CameraFrame) -> CatLocation:
     return CatLocation(present=True, zone="litter", confidence=0.92)
 
 
-def build_detector(env: Mapping[str, str]) -> tuple[CatDetector, str]:
-    """依環境挑模型後端;連不上就退回內建示範模型。回傳 ``(detector, 模式說明)``。
+def _http_backend(
+    env: Mapping[str, str], *, field_guidance: Mapping[str, str] | None = None
+) -> tuple[HttpLocalExtractor | None, str]:
+    """依環境挑本機推論後端;回傳 ``(extractor 或 None, 模式說明)``,``None`` = 用內建示範模型。
 
     只接受 ``http`` / ``https``(擋掉 ``file://`` 之類的 SSRF/本地讀檔);``…/v1`` 走 OpenAI 相容線,
     其餘當 Ollama。印出來的模式說明只含 ``scheme://host:port``(不外洩憑證)。
     """
     url = env.get(_MODEL_URL_ENV, "").strip()
     if not url:
-        return _stub_detector, "內建示範模型(未設 CONVILYN_EDGE_MODEL_URL,不需安裝任何 AI)"
+        return None, "內建示範模型(未設 CONVILYN_EDGE_MODEL_URL,不需安裝任何 AI)"
     if urlsplit(url).scheme not in {"http", "https"}:
-        return _stub_detector, f"內建示範模型(不支援的網址協定:{urlsplit(url).scheme or '空'})"
+        return None, f"內建示範模型(不支援的網址協定:{urlsplit(url).scheme or '空'})"
     base = url.rstrip("/")
     kind = "openai-compat" if base.endswith("/v1") else "ollama"
     extractor = HttpLocalExtractor(
@@ -167,10 +174,49 @@ def build_detector(env: Mapping[str, str]) -> tuple[CatDetector, str]:
         kind=kind,
         base_url=base,
         timeout=_INFER_TIMEOUT_S,
+        field_guidance=field_guidance,
     )
     if extractor.health() is not None:
-        return _stub_detector, f"內建示範模型(本機模型連不上:{_safe_url(base)})"
-    return _extractor_detector(extractor), f"本機模型 {extractor.model}({_safe_url(base)})"
+        return None, f"內建示範模型(本機模型連不上:{_safe_url(base)})"
+    return extractor, f"本機模型 {extractor.model}({_safe_url(base)})"
+
+
+def build_detector(env: Mapping[str, str]) -> tuple[CatDetector, str]:
+    """scripted-sim 後備路徑的 detector(只在找不到 contract 檔時使用)。"""
+    extractor, mode = _http_backend(env)
+    if extractor is None:
+        return _stub_detector, mode
+    return _extractor_detector(extractor), mode
+
+
+#: 一個「給定 placement,生出找貓模型節點」的工廠(每次示範各自建一顆,乾淨隔離)。
+LocatorFactory = Callable[[Placement], "CatLocatorModel | ContractCatLocator"]
+
+
+def build_locator(
+    env: Mapping[str, str], *, contract_path: Path | None = None
+) -> tuple[LocatorFactory, str]:
+    """模型節點的雙路徑工廠 —— 這就是「雲端 manufacture 的 contract 直接掛進 DAG」的接點。
+
+    找得到 contract 檔(預設是隨範例提交的 ``authored/pet_cat_locate.uw.json``,真裝置則由
+    bundle 鏈驗證後安裝)→ ``load_contract`` + ``ContractCatLocator``:prompt、欄位、
+    grounding 規則全部來自雲端製造的 artifact;本機模型只負責「產生」,contract 負責「落地」。
+    沒有 contract 檔 → 退回 scripted-sim(零資產離線也要能跑通)。
+    """
+    path = contract_path if contract_path is not None else PET_CONTRACT_PATH
+    if not path.exists():
+        detector, mode = build_detector(env)
+        return (
+            lambda placement: CatLocatorModel(placement=placement, detector=detector),
+            f"{mode} — scripted-sim 後備(找不到 contract 檔)",
+        )
+    contract = load_contract(path)
+    extractor, mode = _http_backend(env, field_guidance=guidance_from_contract(contract))
+    backend: LocalExtractor = extractor if extractor is not None else ScriptedContractExtractor()
+    return (
+        lambda placement: ContractCatLocator(contract, backend, placement=placement),
+        f"雲端製造的 contract『{contract.contract_id}』+ {mode}",
+    )
 
 
 # ── 人工確認(示範用,模擬「你」有沒有及時回) ───────────────────────────────
@@ -304,7 +350,7 @@ def _judgment(outcome, route: str) -> str:
 async def run_demo(
     *,
     name: str,
-    detector: CatDetector,
+    make_locator: LocatorFactory,
     online: bool,
     review,
     tmp: Path,
@@ -319,7 +365,7 @@ async def run_demo(
         store, threshold=2, window_s=_GRACE_S, key_of=anomaly_bucket(rules), now=clock
     )
     manifest = _manifest_with_local_detector(device_id)
-    cat_locator = CatLocatorModel(placement=resolve_placement(manifest), detector=detector)
+    cat_locator = make_locator(resolve_placement(manifest))
     result.placement = cat_locator.placement
     me, sister = NotifySink("me"), NotifySink("sister")
     breach_deadline = (_DAY.replace(hour=11, minute=57) + timedelta(seconds=_GRACE_S)).isoformat()
@@ -349,6 +395,8 @@ async def run_demo(
     result.me_notified = len(me.sent)
     result.sister_notified = len(sister.sent)
     result.located = "locate" in result.route_keys
+    if isinstance(cat_locator, ContractCatLocator):
+        cat_locator.close()  # 釋放 contract 節點的單執行緒 executor
     return result
 
 
@@ -476,20 +524,32 @@ def render(report: ValueReport) -> str:
     return "\n".join(out)
 
 
-async def run(env: Mapping[str, str] | None = None, *, tmp: Path | None = None) -> ValueReport:
-    """跑完三次示範並產出報告。不含主控台輸出(可測)。"""
+async def run(
+    env: Mapping[str, str] | None = None,
+    *,
+    tmp: Path | None = None,
+    contract_path: Path | None = None,
+) -> ValueReport:
+    """跑完三次示範並產出報告。不含主控台輸出(可測)。
+
+    ``contract_path`` 覆蓋預設的 manufactured contract 資產(測試用:指到不存在的路徑
+    即可驗證 scripted-sim 後備路徑)。"""
     env = os.environ if env is None else env
-    detector, mode = build_detector(env)
+    make_locator, mode = build_locator(env, contract_path=contract_path)
     root = tmp if tmp is not None else Path(tempfile.mkdtemp(prefix="pet-e2e-"))
     demos = {
         "escalation": await run_demo(
-            name="escalation", detector=detector, online=True, review=_SilentReview(), tmp=root
+            name="escalation",
+            make_locator=make_locator,
+            online=True,
+            review=_SilentReview(),
+            tmp=root,
         ),
         "ack": await run_demo(
-            name="ack", detector=detector, online=True, review=_AckReview(), tmp=root
+            name="ack", make_locator=make_locator, online=True, review=_AckReview(), tmp=root
         ),
         "offline": await run_demo(
-            name="offline", detector=detector, online=False, review=_AckReview(), tmp=root
+            name="offline", make_locator=make_locator, online=False, review=_AckReview(), tmp=root
         ),
     }
     # 確定性以實測證明:同情境重跑一次(獨立 store),要求可觀察結果(路由/通知數/是否定位)一致。
@@ -497,7 +557,11 @@ async def run(env: Mapping[str, str] | None = None, *, tmp: Path | None = None) 
     replay_root = root / "_determinism_replay"
     replay_root.mkdir(parents=True, exist_ok=True)
     replay = await run_demo(
-        name="escalation", detector=detector, online=True, review=_SilentReview(), tmp=replay_root
+        name="escalation",
+        make_locator=make_locator,
+        online=True,
+        review=_SilentReview(),
+        tmp=replay_root,
     )
     first = demos["escalation"]
     deterministic = (

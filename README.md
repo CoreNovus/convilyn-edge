@@ -122,6 +122,93 @@ Enqueue is **idempotent** (keyed by the envelope's unique `event_id`), and
 `derive_idempotency_key` reproduces the server's content-addressed reconcile key
 byte-for-byte — so a retried flush is a no-op, never a duplicate.
 
+## The manufactured contract (`convilyn_edge.authored`)
+
+A workflow authored on the Convilyn platform compiles its decision-critical AI
+node into a **grounded contract**: the prompt, the typed output fields, and a
+deterministic grounding rule per field. The artifact ships to the device inside
+a `uw_*` bundle; on-device you mount it in one line:
+
+```python
+from convilyn_edge.authored import ContractModelOperator
+
+operator = ContractModelOperator.for_contract("installed/pet_cat_locate.uw.json")
+result = await operator.infer({"scene": scene_text}, schema={})
+```
+
+`for_contract` loads the artifact, builds the reference HTTP-local extractor
+from the environment (`EDGE_LLM_URL` → OpenAI-compatible, else Ollama), resolves
+the local model tag from the contract's `model_binding`, and wires the
+`closed_set` steering below — all overridable (`extractor=`, `model=`, `env=`).
+The multi-step assembly (`load_contract` + your own runner) remains for full
+control.
+
+### The two per-field weapons: `closed_set` and `field_guidance`
+
+Every contract field carries one of two deterministic grounding modes:
+
+- **`verbatim`** — the value must appear (whitespace-collapsed) in the device's
+  own source text. For extraction: quotes, names, readings. Anything else
+  degrades to the missing sentinel — blank over fabrication.
+- **`closed_set`** — the value must normalise into the field's **authored**
+  `allowed_values`, and the grounded output is always the authored canonical
+  label, never the model's raw string. For classification and derived answers
+  ("is the cat present" → `{"true","false"}`) — values that legitimately never
+  appear verbatim in the source.
+
+`closed_set` fields need one more thing: an unguided model is steered by the
+blanket "answer verbatim from the source" rule, which a closed-set answer can
+never satisfy. `guidance_from_contract(contract)` renders each `closed_set`
+field's authored labels as a per-field answer rule; pass it as the extractor's
+`field_guidance` and each such field is steered toward its own label set
+(`for_contract` does this automatically):
+
+```python
+from convilyn_edge.authored import guidance_from_contract, load_contract
+from convilyn_edge.clientcompute.engine import HttpLocalExtractor
+
+contract = load_contract("installed/pet_cat_locate.uw.json")
+extractor = HttpLocalExtractor(
+    model="qwen3:4b", field_guidance=guidance_from_contract(contract)
+)
+```
+
+Steering is advisory; grounding is enforced regardless. A model that answers
+off-set is degraded to the sentinel — never trusted.
+
+### Determinism-by-design ≠ model correctness (tiered testing)
+
+The SDK's guarantees are **structural**, and it's important to test at the
+right tier:
+
+- **T0 — structure & schema (the SDK guarantees this).** Every `infer` returns
+  a total, schema-shaped field dict; `closed_set` answers are always authored
+  labels; `verbatim` answers always appear in your sources; failures degrade to
+  the sentinel instead of fabricating. You don't need to test any of that —
+  it's pinned by the SDK's own suite.
+- **T1 — model output quality (you must test this).** Whether *your* local
+  model on *your* hardware answers *your* scenes correctly is not something the
+  SDK can promise. Build a small fixed eval set and assert per-case:
+
+```python
+CASES = [  # (scene text, expected grounded fields) — grow this from real traffic
+    ("Cat curled on the sofa by the window.", {"present": "true", "zone": "sofa"}),
+    ("Empty room, feeder untouched.", {"present": "false"}),
+]
+
+async def evaluate(operator) -> float:
+    passed = 0
+    for scene, expected in CASES:
+        result = await operator.infer({"scene": scene}, schema={})
+        got = result.output or {}
+        passed += all(got.get(k) == v for k, v in expected.items())
+    return passed / len(CASES)  # gate your rollout on a floor, e.g. >= 0.9
+```
+
+Run it against every model/quantisation/prompt change and compare to the last
+score before swapping anything in production — a candidate model that scores
+below your floor never ships, no matter how good one demo answer looked.
+
 ## CLI — simulate with no hardware (`convilyn-edge`)
 
 A developer shouldn't need a real scanner to test a workflow. Replay a JSON
@@ -137,6 +224,51 @@ A scenario declares a device and an ordered list of events (each with an optiona
 `delay_ms` / `repeat`); `SimulatedSource` — the first concrete `EventSource` —
 replays it as an `EventEnvelope` stream. (`dev run` / `trace replay` land in v0.2
 with the workflow executor; `simulate --no-delay` is the deterministic replay.)
+
+## Device-RAM fit guard (`convilyn_edge.runners`)
+
+Declare a model's minimum device RAM on its `RunnerConfig` and the selector
+warns *before* the model loads — never an OOM diagnosed after:
+
+```python
+from convilyn_edge.runners import RunnerConfig, select_runner
+
+config = RunnerConfig(model="qwen3:4b", min_ram_mb=4096)
+runner = select_runner("llama_cpp", config)            # logs a warning if short
+runner = select_runner("llama_cpp", config, strict_fit=True)  # raises RamFitError instead
+```
+
+By default a shortfall only warns (you may know your device better than the
+probe); `strict_fit=True` turns it into a hard `RamFitError`. `check_ram_fit()`
+returns the underlying `RamFitReport` (both numbers + message) for your own UX,
+and `available_ram_mb=...` checks fit against another device's manifest instead
+of the local host. Omit `min_ram_mb` and nothing changes — the check is opt-in.
+
+## Health vs warmup — cold start ≠ offline (`convilyn_edge.warmup`)
+
+`health()` answers *"is the local inference server reachable?"* — it says
+nothing about whether the model weights are loaded. The first inference after
+boot can take tens of seconds on an edge device; without a warmup probe that
+latency is indistinguishable from an outage. `warmup()` is the assertable
+three-state answer:
+
+```python
+from convilyn_edge.runners import RunnerConfig, select_runner, warmup_runner
+
+runner = select_runner("ollama", RunnerConfig(model="qwen3:4b"))
+report = runner.warmup(deadline_ms=30_000)   # pay the cold start before opening
+if report.state == "unreachable":
+    show_offline_banner(report.detail)       # a different fix than "loading…"
+elif report.state == "cold_started":
+    log_startup_latency(report.latency_ms)   # the next request will be fast
+# "warm" → the model was already loaded; nothing to do
+```
+
+`unreachable` is never faked as a slow cold start (reachability is checked
+first), and a probe that exceeds its deadline while the server stays up reports
+`cold_started` — the model is loading, not offline. Runners without a warmup
+hook are handled generically: `warmup_runner(runner)` returns already-`warm`
+for them, so the call is always safe.
 
 ## Design principles (enforced in code, not just docs)
 

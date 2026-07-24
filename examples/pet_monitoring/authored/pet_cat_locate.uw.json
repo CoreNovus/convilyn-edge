@@ -1,0 +1,37 @@
+{
+  "contract_id": "uw_petcatlocatedemo00000001",
+  "version": "1.0.0",
+  "prompt_template": "You are an on-device pet camera assistant. Given the scene description, report whether the cat is present, which monitored zone it is in (one of: sofa, kitchen, window, litter, unknown), and quote the exact phrase from the scene that supports your answer.",
+  "fields": [
+    {
+      "name": "present",
+      "mode": "closed_set",
+      "allowed_values": [
+        "true",
+        "false"
+      ]
+    },
+    {
+      "name": "zone",
+      "mode": "closed_set",
+      "allowed_values": [
+        "sofa",
+        "kitchen",
+        "window",
+        "litter",
+        "unknown"
+      ]
+    },
+    {
+      "name": "evidence_snippet",
+      "mode": "verbatim"
+    }
+  ],
+  "anchors_contract": {
+    "max_value_chars": 2000,
+    "max_total_chars": 20000,
+    "value_type": "string",
+    "missing_sentinel": "Not specified"
+  },
+  "model_binding": "local-qwen3-4b"
+}

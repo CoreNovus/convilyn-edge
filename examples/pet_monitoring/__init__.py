@@ -40,6 +40,13 @@ the adapter registry + capability-negotiated placement, ③ the decision path co
 
 from __future__ import annotations
 
+from examples.pet_monitoring.contract_node import (
+    PET_CONTRACT_PATH,
+    ContractCatLocator,
+    ScriptedContractExtractor,
+    build_cat_locator,
+    describe_frame,
+)
 from examples.pet_monitoring.events import (
     EVENT_CAMERA_FRAME,
     EVENT_FEEDER_READING,
@@ -94,6 +101,11 @@ __all__ = [
     "AnomalyVerdict",
     # grounded model node (rules 2 + 3)
     "CatLocatorModel",
+    "PET_CONTRACT_PATH",
+    "ContractCatLocator",
+    "ScriptedContractExtractor",
+    "build_cat_locator",
+    "describe_frame",
     "CameraFrame",
     "CatLocation",
     "CatDetector",

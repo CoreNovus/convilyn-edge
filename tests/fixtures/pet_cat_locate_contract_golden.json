@@ -1,0 +1,37 @@
+{
+  "contract_id": "uw_petcatlocatedemo00000001",
+  "version": "1.0.0",
+  "prompt_template": "[REDACTED for publication — the real artifact carries the platform's rendered extractor prompt; parse/ground behaviour is prompt-independent.]",
+  "fields": [
+    {
+      "name": "present",
+      "mode": "closed_set",
+      "allowed_values": [
+        "true",
+        "false"
+      ]
+    },
+    {
+      "name": "zone",
+      "mode": "closed_set",
+      "allowed_values": [
+        "sofa",
+        "kitchen",
+        "window",
+        "litter",
+        "unknown"
+      ]
+    },
+    {
+      "name": "evidence_snippet",
+      "mode": "verbatim"
+    }
+  ],
+  "anchors_contract": {
+    "max_value_chars": 2000,
+    "max_total_chars": 20000,
+    "value_type": "string",
+    "missing_sentinel": "Not specified"
+  },
+  "model_binding": "local-qwen3-4b"
+}

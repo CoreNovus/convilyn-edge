@@ -24,12 +24,14 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
 from convilyn_edge.clientcompute.contract import MISSING_SENTINEL
+from convilyn_edge.warmup import DEFAULT_WARM_THRESHOLD_MS, WarmupResult
 
 BackendKind = Literal["ollama", "openai-compat"]
 
@@ -212,6 +214,55 @@ class HttpLocalExtractor:
         except Exception as exc:  # noqa: BLE001 — health reports, never raises
             return f"local inference server unreachable at {self.base_url} ({type(exc).__name__})"
         return None
+
+    def warmup(
+        self,
+        deadline_ms: int | None = None,
+        *,
+        warm_threshold_ms: float = DEFAULT_WARM_THRESHOLD_MS,
+    ) -> WarmupResult:
+        """Pay the model's cold-start now and report which state the server was in.
+
+        Runs :meth:`health` first — an unreachable server is reported as
+        ``unreachable``, never mislabelled as a slow cold start. Then times one
+        minimal probe inference: within ``warm_threshold_ms`` → ``warm``; slower →
+        ``cold_started`` (the warmup itself absorbed the load cost). A probe that
+        fails while the server is still up (e.g. ``deadline_ms`` elapsed during
+        weight loading) is ``cold_started`` with the observed time; a server that
+        dropped mid-probe is ``unreachable``.
+        """
+        problem = self.health()
+        if problem is not None:
+            return WarmupResult(state="unreachable", detail=problem)
+        timeout = (deadline_ms / 1000.0) if deadline_ms is not None else self.timeout
+        url, body = self._request(
+            [
+                {"role": "system", "content": "You are a warmup probe."},
+                {"role": "user", "content": 'Reply with the JSON object {"ok": true}.'},
+            ]
+        )
+        start = time.monotonic()
+        try:
+            self.transport(url, body, self._headers(), timeout)
+        except Exception as exc:  # noqa: BLE001 — warmup reports, never raises
+            elapsed_ms = (time.monotonic() - start) * 1000.0
+            if self.health() is not None:
+                return WarmupResult(
+                    state="unreachable",
+                    detail=f"server dropped during warmup probe ({type(exc).__name__})",
+                )
+            return WarmupResult(
+                state="cold_started",
+                latency_ms=elapsed_ms,
+                detail=(
+                    f"warmup probe did not finish within its deadline while the server "
+                    f"stayed reachable — model still loading ({type(exc).__name__})"
+                ),
+            )
+        elapsed_ms = (time.monotonic() - start) * 1000.0
+        if elapsed_ms <= warm_threshold_ms:
+            return WarmupResult(state="warm", latency_ms=elapsed_ms)
+        return WarmupResult(state="cold_started", latency_ms=elapsed_ms)
 
     def _request(self, messages: list[dict[str, str]]) -> tuple[str, dict[str, Any]]:
         """Return (url, body) for this backend's chat endpoint."""

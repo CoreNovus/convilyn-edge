@@ -27,6 +27,7 @@ from typing import Any
 from convilyn_edge.clientcompute.engine import BackendKind, HttpLocalExtractor
 from convilyn_edge.clientcompute.operator import EdgeModelOperator, ExtractInput
 from convilyn_edge.spi.model import ModelResult, Placement
+from convilyn_edge.warmup import WarmupResult
 
 _DEFAULT_OLLAMA_URL = "http://localhost:11434"
 
@@ -116,6 +117,16 @@ class OpenAICompatRunner:
     def health(self) -> str | None:
         """``None`` if the local inference server is reachable, else a problem string."""
         return self._extractor.health()
+
+    def warmup(self, deadline_ms: int | None = None) -> WarmupResult:
+        """Pay the model's cold-start now; the three-state cold≠offline report.
+
+        Delegates to the wrapped extractor's timed probe inference — ``warm`` /
+        ``cold_started(latency_ms)`` / ``unreachable`` (see
+        :mod:`convilyn_edge.warmup`). Call before opening for business and drive
+        the "warming up…" UX off the returned state.
+        """
+        return self._extractor.warmup(deadline_ms)
 
 
 def _http_extractor(

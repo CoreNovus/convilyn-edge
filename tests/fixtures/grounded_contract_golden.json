@@ -1,0 +1,36 @@
+{
+  "contract_id": "uw_aaaaaaaaaaaaaaaaaaaaaaaa",
+  "version": "3",
+  "prompt_template": "Locate the subject in the scene and report the declared fields.",
+  "fields": [
+    {
+      "name": "present",
+      "mode": "closed_set",
+      "allowed_values": [
+        "true",
+        "false"
+      ]
+    },
+    {
+      "name": "zone",
+      "mode": "closed_set",
+      "allowed_values": [
+        "sofa",
+        "kitchen",
+        "window",
+        "unknown"
+      ]
+    },
+    {
+      "name": "evidence_snippet",
+      "mode": "verbatim"
+    }
+  ],
+  "anchors_contract": {
+    "max_value_chars": 2000,
+    "max_total_chars": 20000,
+    "value_type": "string",
+    "missing_sentinel": "Not specified"
+  },
+  "model_binding": "local-qwen3-4b"
+}

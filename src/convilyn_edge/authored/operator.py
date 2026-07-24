@@ -24,14 +24,26 @@ serialise behind it. Pass a shared ``executor`` to pool across operators.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import functools
+import os
 import time
 from collections.abc import Mapping
 from concurrent.futures import Executor, ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 
-from convilyn_edge.authored.contract import GroundedContract, ground_fields
-from convilyn_edge.clientcompute.engine import LocalExtractor
+from convilyn_edge.authored.contract import (
+    GroundedContract,
+    ground_fields,
+    guidance_from_contract,
+    load_contract,
+)
+from convilyn_edge.clientcompute.engine import (
+    HttpLocalExtractor,
+    LocalExtractor,
+    resolve_local_model_tag,
+)
 from convilyn_edge.spi.model import Evidence, ModelResult, Placement
 
 
@@ -59,6 +71,57 @@ class ContractModelOperator:
         self._model_version = model_version or contract.version
         self._executor = executor
         self._owned_executor: ThreadPoolExecutor | None = None
+
+    @classmethod
+    def for_contract(
+        cls,
+        source: str | Path | GroundedContract,
+        *,
+        extractor: LocalExtractor | None = None,
+        env: Mapping[str, str] | None = None,
+        model: str | None = None,
+        model_id: str | None = None,
+        model_version: str | None = None,
+        executor: Executor | None = None,
+    ) -> ContractModelOperator:
+        """One line from a manufactured contract to a usable grounded operator.
+
+        The pit-of-success entry point: ``source`` is a contract file path (an
+        installed bundle artifact) or an already-parsed
+        :class:`GroundedContract`. With no ``extractor`` given, the reference
+        HTTP-local extractor is built from the environment
+        (:meth:`HttpLocalExtractor.from_env` — ``EDGE_LLM_URL`` selects an
+        OpenAI-compatible server, otherwise Ollama), its model tag is resolved
+        from the contract's ``model_binding``, and the contract's
+        ``closed_set`` fields are wired as per-field steering
+        (:func:`guidance_from_contract`) automatically — the three assembly
+        steps an integrator would otherwise hand-write.
+
+        Overrides: ``model`` replaces the resolved local model tag; ``env``
+        replaces ``os.environ``; ``extractor`` supplies a custom runner as-is
+        (steering is then the caller's choice); ``model_id`` /
+        ``model_version`` / ``executor`` pass through to the constructor.
+        A bad path or malformed contract fails loud (:func:`load_contract`) —
+        this is sugar over the existing multi-step assembly, not a new layer.
+        """
+        contract = source if isinstance(source, GroundedContract) else load_contract(source)
+        if extractor is None:
+            resolved_model = model or (
+                resolve_local_model_tag(contract.model_binding) if contract.model_binding else None
+            )
+            base = HttpLocalExtractor.from_env(
+                os.environ if env is None else env, model=resolved_model
+            )
+            extractor = dataclasses.replace(
+                base, field_guidance=guidance_from_contract(contract)
+            )
+        return cls(
+            extractor,
+            contract,
+            model_id=model_id,
+            model_version=model_version,
+            executor=executor,
+        )
 
     @property
     def contract(self) -> GroundedContract:

@@ -13,7 +13,10 @@ staying **locked into** Convilyn's runtime, grounding, and deploy chain.
 
 See the whole pack run end to end — a full day of a cat's monitoring, fully **offline**,
 **deterministic**, and **uninterrupted** — then read a plain-language business-value report. No
-model, no cloud, no config required (it uses a deterministic stub if no local model is set).
+model, no cloud, no config required — the cat-locate node runs the **cloud-manufactured
+contract** (`authored/pet_cat_locate.uw.json`) with a deterministic scripted extractor standing
+in for the local model, so the real contract path (load → prompt → per-field grounding) is
+exercised even with nothing installed.
 
 ```bash
 # 1. install the SDK
@@ -49,7 +52,35 @@ the alert; the flow is deterministic either way.
 |---|---|
 | **① A pack is a DECLARATION, not imperative control-flow.** | `pack.py::assemble_pet_alert_pipeline` composes the workflow from the generic runtime primitives — threshold aggregation, `.route(...)` branches, review-expiry — into an immutable `Pipeline`. No hand-wired `async if`/`else`. |
 | **② Device capabilities bind via a capability registry + a deterministic resolver.** | `registry.py::AdapterRegistry` (adapters by key, never `if brand ==`) + `model_node.py::resolve_placement` (edge/cloud from the device's reported `object_detection` asset, never `if silicon ==`). |
-| **③ The decision path consumes a grounded `ModelOperator`.** | `model_node.py::CatLocatorModel` returns a typed, evidence-carrying `ModelResult` on the alert branch; the server re-grounds it — the device is never a second source of truth. |
+| **③ The decision path consumes a grounded `ModelOperator`.** | `contract_node.py::ContractCatLocator` executes the **cloud-manufactured contract** (`authored/pet_cat_locate.uw.json`) via `load_contract` + `ContractModelOperator`: prompt, typed fields, and per-field grounding rules all come from the manufactured artifact, and every answer is grounded by its authored rule (closed-set membership for `present`/`zone`, verbatim for `evidence_snippet`) before the DAG sees it. The server re-grounds it again — the device is never a second source of truth. |
+
+## The manufactured-contract story (what this example is really about)
+
+The cat-locate brain is **not hand-written on the device**. When the workflow is
+authored on the Convilyn platform, the platform *manufactures* a grounded
+contract — the prompt, the typed output fields, and the deterministic grounding
+rule for each field — and ships it to the device inside a `uw_*` bundle. The
+committed `authored/pet_cat_locate.uw.json` is that artifact (checked in as the
+example's asset; a real device receives it through the digest-verified
+`convilyn_edge.bundle` chain). On the device it mounts straight into the DAG:
+
+```python
+from examples.pet_monitoring import PET_CONTRACT_PATH, ContractCatLocator
+from convilyn_edge.authored import load_contract
+from convilyn_edge.clientcompute.engine import HttpLocalExtractor
+
+contract = load_contract(PET_CONTRACT_PATH)          # the manufactured artifact
+locator = ContractCatLocator(
+    contract,
+    HttpLocalExtractor(model="qwen3:4b"),            # any local model produces…
+    placement="edge",
+)                                                    # …the contract grounds
+```
+
+Swap the local model and nothing else changes — the contract still enforces the
+authored fields and grounding rules. With no contract file on disk the pack
+falls back to the scripted simulator (`build_cat_locator(...)`), so the example
+always runs offline with zero assets.
 
 ## The workflow (charter §5 journey ③)
 
@@ -78,7 +109,9 @@ the runtime's timer enforces — none of it is orchestration the integrator hand
 | `sources.py` | camera / feeder / water / litter **simulator** `EventSource` adapters (a real pack swaps in hardware) |
 | `operators.py` | `PetAnomalyRules` — a deterministic, offline-first anomaly rule table (never an LLM) |
 | `sinks.py` | `NotifySink` — an R1 reference `ActionSink` ("notify me" / "notify sister") |
-| `model_node.py` | `CatLocatorModel` — the grounded cat-locate node + capability-negotiated placement |
+| `contract_node.py` | `ContractCatLocator` — the manufactured-contract cat-locate node (`load_contract` + `ContractModelOperator`) + the `build_cat_locator` dual-path factory |
+| `authored/pet_cat_locate.uw.json` | the cloud-manufactured grounded contract, committed as the example's asset |
+| `model_node.py` | `CatLocatorModel` — the scripted-sim fallback node + capability-negotiated placement |
 | `registry.py` | `AdapterRegistry` — bind adapters by capability key |
 | `pack.py` | `assemble_pet_alert_pipeline` — the declarative DAG |
 
@@ -91,8 +124,8 @@ from convilyn_edge.offline.queue import DurableQueue
 from convilyn_edge.runtime import ThresholdAggregator
 from convilyn_edge.probe import probe_device
 from examples.pet_monitoring import (
-    PetAnomalyRules, CatLocatorModel, ConnectivityProvider, NotifySink,
-    anomaly_bucket, assemble_pet_alert_pipeline, default_alert_review, resolve_placement,
+    PetAnomalyRules, ConnectivityProvider, NotifySink, anomaly_bucket,
+    assemble_pet_alert_pipeline, build_cat_locator, default_alert_review, resolve_placement,
 )
 
 my_review = ...        # your device-side HumanReview adapter (the on-device HITL surface)
@@ -105,7 +138,9 @@ manifest = probe_device(device_id="jetson-01")               # capability negoti
 pipeline = assemble_pet_alert_pipeline(
     aggregator=aggregator,
     connectivity=ConnectivityProvider(online=True),
-    cat_locator=CatLocatorModel(placement=resolve_placement(manifest)),  # edge iff object_detection installed
+    # the manufactured contract mounts into the DAG (scripted-sim fallback if no contract file);
+    # edge iff object_detection installed
+    cat_locator=build_cat_locator(placement=resolve_placement(manifest)),
     review=my_review,
     notify_primary=NotifySink("me"),
     notify_escalation=NotifySink("sister"),

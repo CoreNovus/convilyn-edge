@@ -4,6 +4,38 @@ All notable changes to `convilyn-edge` are documented here. The SDK's public
 surface follows Semantic Versioning; pre-1.0 minor/patch may still adjust
 surface under the alpha label.
 
+## 0.1.0b20 — 2026-07-24
+
+The integrator-feedback DX round: warm-up, fit-guard, the manufactured-contract
+reference story, and pit-of-success discoverability. Additive; no breaking changes.
+
+### Added
+
+- `Runner.warmup(deadline_ms=None) -> WarmupResult` — first-inference latency is now
+  distinguishable from unreachability: `warm | cold_started(elapsed) | unreachable`
+  three-state result. Default implementation is a no-op (`already warm`), so existing
+  runners are unaffected. `OpenAICompatRunner` and `HttpLocalExtractor` implement a
+  real probe (health first, then timed minimal inference; `unreachable` is never
+  reported as a cold start).
+- Declarative device-RAM fit guard: `min_ram_mb` on runner config + fit check at
+  runner selection — warns before OOM (opt-in `strict_fit=True` raises instead).
+  No device-name branching; purely declarative comparison against the probed profile.
+- `ContractModelOperator.for_contract(...)` — one-call assembly: auto
+  `load_contract`, environment-based extractor selection, model-binding resolution,
+  and `closed_set` steering.
+
+### Changed
+
+- The pet-monitoring example's cat-locate node now mounts the cloud-manufactured
+  grounded contract (`authored/*.uw.json`) through `ContractModelOperator`; the
+  scripted-sim path remains as the zero-asset offline fallback.
+
+### Docs
+
+- README: `closed_set` / `field_guidance` discoverability section and the
+  tiered-testing guidance (T0 structure/schema is SDK-guaranteed;
+  T1 model-output quality is the integrator's own harness).
+
 ## 0.1.0b19 — 2026-07-23
 
 Closes the Jetson integrator-audit gaps: the **manufactured grounded-contract** consumption path

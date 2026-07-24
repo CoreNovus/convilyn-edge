@@ -32,10 +32,14 @@ from convilyn_edge.runners.qnn import (
 )
 from convilyn_edge.runners.registry import (
     SUPPORTED_RUNTIMES,
+    RamFitError,
+    RamFitReport,
     RunnerConfig,
     UnsupportedRuntimeError,
+    check_ram_fit,
     select_runner,
 )
+from convilyn_edge.warmup import WarmupResult, WarmupState, warmup_runner
 
 __all__ = [
     # runners
@@ -49,6 +53,14 @@ __all__ = [
     "RunnerConfig",
     "SUPPORTED_RUNTIMES",
     "UnsupportedRuntimeError",
+    # device-RAM fit guard
+    "check_ram_fit",
+    "RamFitError",
+    "RamFitReport",
+    # warmup (cold ≠ offline)
+    "warmup_runner",
+    "WarmupResult",
+    "WarmupState",
     # grounding introspection
     "failing_fields",
     "failing_fields_count",
