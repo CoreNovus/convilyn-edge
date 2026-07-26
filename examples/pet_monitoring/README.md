@@ -22,7 +22,7 @@ exercised even with nothing installed.
 # 1. install the SDK
 pip install convilyn-edge
 # 2. get the pack (clone the repo, or copy the examples/pet_monitoring/ folder next to your code)
-git clone https://github.com/CoreNovus/convilyn && cd convilyn/sdk/edge-python
+git clone https://github.com/CoreNovus/convilyn-edge && cd convilyn-edge
 # 3. run the day (stub mode — no Ollama needed)
 PYTHONPATH=src python -m examples.pet_monitoring.run_e2e
 ```

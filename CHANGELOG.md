@@ -4,6 +4,32 @@ All notable changes to `convilyn-edge` are documented here. The SDK's public
 surface follows Semantic Versioning; pre-1.0 minor/patch may still adjust
 surface under the alpha label.
 
+## 0.1.0b22 — 2026-07-26
+
+A docs-only release. **The library surface is byte-identical to b21** — no new,
+changed, or removed API, no behaviour change. It exists because the two fixes
+below live inside the published artifact itself, so correcting them in the
+source tree does nothing for anyone who already installed the package or cloned
+the mirror.
+
+### Fixed
+
+- The reference pack's quickstart pointed `git clone` at a repository that is
+  not public, using a source-tree path that does not exist in this
+  distribution. Step 2 of the three-step "under a minute" demo therefore failed
+  for every reader. It now clones this package's own repository, whose root is
+  the SDK root:
+  `git clone https://github.com/CoreNovus/convilyn-edge && cd convilyn-edge`.
+- Removed tracker references from the reference pack's module docstring — they
+  resolve to a private tracker and mean nothing to a reader of this package.
+
+### Internal
+
+- `examples/` is now covered by the packaging vocabulary lint. It was the only
+  SDK surface that ships to integrators (in the sdist and the repository, not
+  the wheel) without being scanned, which is why both fixes above shipped. The
+  lint is now what stops this class of mistake, not review attention.
+
 ## 0.1.0b21 — 2026-07-25
 
 The b20 integrator-feedback round: reasoning-model honesty, operator

@@ -2,7 +2,7 @@
 
 This is the capstone: the pack's control flow — time-window threshold aggregation, an
 offline-vs-locate branch, a grounded model node, a human review that escalates on expiry — is
-expressed by composing the **generic runtime primitives** (#2792 + #2791) into an immutable
+expressed by composing the **generic runtime primitives** into an immutable
 :class:`~convilyn_edge.runtime.Pipeline`. There is **no hand-wired ``async if``/``else``**: every
 branch is a declarative ``.route(...)``, the "≥ N anomalies in a window" is a
 :class:`~convilyn_edge.runtime.ThresholdAggregator`, and "escalate after 10 min of silence" is a
